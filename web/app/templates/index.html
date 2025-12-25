@@ -44,8 +44,8 @@
                 <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div class="min-w-0">
                         <div class="flex flex-wrap items-center gap-2">
-                            <div class="font-semibold truncate">
-                                {{ it.original_filename }}
+                            <div class="font-semibold truncate" title="{{ it.original_filename }}">
+                                {{ it.original_filename|truncate(25, True, '…') }}
                             </div>
                             <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
                   user_id: {{ it.user_id }}
@@ -86,6 +86,13 @@
                         </a>
                         {% endif %}
 
+                        {% if it.files.trimmed.exists %}
+                        <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                           href="/download/{{ it.user_id }}/{{ it.request_id }}/trimmed">
+                            Скачать trimmed
+                        </a>
+                        {% endif %}
+
                         {% if it.files.cleaned.exists %}
                         <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
                            href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned">
@@ -100,7 +107,6 @@
                         </a>
                         {% endif %}
 
-
                         <button class="px-3 py-2 rounded-xl bg-rose-600 text-white shadow-sm hover:bg-rose-500 text-sm"
                                 onclick="delReq('{{ it.user_id }}','{{ it.request_id }}')">
                             Удалить
@@ -112,7 +118,6 @@
         </div>
         {% endif %}
     </div>
-
 
 </div>
 

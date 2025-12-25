@@ -100,7 +100,14 @@ def scan_requests(storage_dir: Path) -> List[Dict[str, Any]]:
             except FileNotFoundError:
                 mtime = int(req_dir.stat().st_mtime)
 
-            input_path = req_dir / "input.pdf"
+            # Bot storage evolved:
+            #  - new: input_original.pdf (+ optional input_trimmed.pdf)
+            #  - old: input.pdf
+            input_original_path = req_dir / "input_original.pdf"
+            legacy_input_path = req_dir / "input.pdf"
+            input_path = input_original_path if input_original_path.exists() else legacy_input_path
+
+            trimmed_path = req_dir / "input_trimmed.pdf"
             cleaned_path = req_dir / "cleaned.pdf"
             small_path = req_dir / "cleaned_small.pdf"
 
@@ -123,12 +130,14 @@ def scan_requests(storage_dir: Path) -> List[Dict[str, Any]]:
                     "original_filename": original,
                     "status": status,
                     "created_at": created_at,
-                    "created_at_h": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at)) if created_at else "-",
+                    "created_at_h": time.strftime("%Y-%m-%d %H:%M:%S",
+                                                  time.localtime(created_at)) if created_at else "-",
                     "mtime": mtime,
                     "mtime_h": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)),
                     "meta_rel": _safe_rel(meta_path, storage_dir),
                     "files": {
                         "input": file_info(input_path),
+                        "trimmed": file_info(trimmed_path),
                         "cleaned": file_info(cleaned_path),
                         "cleaned_small": file_info(small_path),
                     },
@@ -162,8 +171,6 @@ async def token_guard(request: Request, call_next):
 
     response = await call_next(request)
 
-    # If token was passed via query parameter, persist it in a cookie
-    # so downloads/buttons work without appending token to every link.
     if qp_token and qp_token == cfg.token:
         try:
             response.set_cookie(
@@ -189,9 +196,9 @@ async def index(request: Request, q: str = ""):
         reqs = [
             r for r in reqs
             if ql in str(r["user_id"]).lower()
-            or ql in str(r["request_id"]).lower()
-            or ql in (r["original_filename"] or "").lower()
-            or ql in (r["status"] or "").lower()
+               or ql in str(r["request_id"]).lower()
+               or ql in (r["original_filename"] or "").lower()
+               or ql in (r["status"] or "").lower()
         ]
 
     usage = _dir_size_bytes(cfg.storage_dir)
@@ -219,9 +226,9 @@ async def api_requests(q: str = ""):
         reqs = [
             r for r in reqs
             if ql in str(r["user_id"]).lower()
-            or ql in str(r["request_id"]).lower()
-            or ql in (r["original_filename"] or "").lower()
-            or ql in (r["status"] or "").lower()
+               or ql in str(r["request_id"]).lower()
+               or ql in (r["original_filename"] or "").lower()
+               or ql in (r["status"] or "").lower()
         ]
     return {"items": reqs}
 
@@ -252,8 +259,12 @@ async def download_file(user_id: str, request_id: str, kind: str):
     rd = _resolve_request_dir(cfg.storage_dir, user_id, request_id)
 
     if kind == "input":
-        p = rd / "input.pdf"
+        # Prefer new name, fallback to legacy
+        p = (rd / "input_original.pdf") if (rd / "input_original.pdf").exists() else (rd / "input.pdf")
         default_name = "input.pdf"
+    elif kind == "trimmed":
+        p = rd / "input_trimmed.pdf"
+        default_name = "input_trimmed.pdf"
     elif kind == "cleaned":
         p = rd / "cleaned.pdf"
         default_name = "cleaned.pdf"
@@ -276,6 +287,9 @@ async def download_file(user_id: str, request_id: str, kind: str):
 
     if kind == "input":
         filename = original
+    elif kind == "trimmed":
+        stem = Path(original).stem
+        filename = f"{stem}_trimmed.pdf"
     elif kind == "cleaned":
         stem = Path(original).stem
         filename = f"{stem}_cleaned.pdf"
