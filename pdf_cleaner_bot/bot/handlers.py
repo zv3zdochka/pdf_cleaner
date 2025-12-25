@@ -14,16 +14,28 @@ from aiogram.types import FSInputFile, Message
 from pdf_cleaner_bot.storage.manager import StorageManager
 
 
+async def cmd_start(message: Message) -> None:
+    """
+    /start handler: simple greeting and short instructions.
+    """
+    await message.answer(
+        "Привет! Пришлите мне PDF-файл (до 50 МБ — это ограничение Telegram), "
+        "я автоматически найду и очищу нужные зоны, "
+        "а затем пришлю вам обработанный PDF с тем же именем файла.\n\n"
+        "Также файлы сохраняются на сервере и доступны через веб-интерфейс."
+    )
+
+
 async def handle_document(
-        message: Message,
-        bot: Bot,
-        *,
-        processor,
-        shrink_pdf,
-        process_lock: asyncio.Lock,
-        telegram_max_file_size: int,
-        internal_max_file_size: int,
-        storage: StorageManager,
+    message: Message,
+    bot: Bot,
+    *,
+    processor,
+    shrink_pdf,
+    process_lock: asyncio.Lock,
+    telegram_max_file_size: int,
+    internal_max_file_size: int,
+    storage: StorageManager,
 ) -> None:
     document = message.document
     if not document:
