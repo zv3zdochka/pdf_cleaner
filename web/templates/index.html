@@ -1,0 +1,56 @@
+{% extends "layout.html" %}
+{% block body %}
+  <div class="card" style="margin-bottom: 12px;">
+    <div class="card-hd">
+      <h2>Запросы</h2>
+      <div class="searchbar">
+        <form method="get" action="/" style="display:flex; gap:10px; width:100%; align-items:center;">
+          <input name="q" value="{{ q or '' }}" placeholder="Поиск: request_id / user_id / имя файла / статус" />
+          <button class="btn accent" type="submit">Искать</button>
+          {% if q %}
+            <a class="btn" href="/">Сбросить</a>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+    <div class="card-bd">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Request</th>
+            <th>Filename</th>
+            <th>Status</th>
+            <th>Size</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="mono">{{ r.user_id }}</td>
+            <td class="mono">
+              <a href="/users/{{ r.user_id }}/requests/{{ r.request_id }}">{{ r.request_id }}</a>
+            </td>
+            <td>{{ r.original_filename or "-" }}</td>
+            <td>
+              {% if r.status == "done" %}
+                <span class="badge ok">done</span>
+              {% elif r.status and "failed" in r.status %}
+                <span class="badge bad">{{ r.status }}</span>
+              {% else %}
+                <span class="badge warn">{{ r.status or "-" }}</span>
+              {% endif %}
+            </td>
+            <td class="mono">{{ r.total_size_h }}</td>
+            <td class="mono">{{ r.created_h }}</td>
+          </tr>
+          {% endfor %}
+          {% if rows|length == 0 %}
+          <tr><td colspan="6" style="color:rgba(233,238,252,0.7);">Пока нет сохранённых запросов.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock %}

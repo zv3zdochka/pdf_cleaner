@@ -1,0 +1,71 @@
+{% extends "layout.html" %}
+{% block body %}
+  <div class="card" style="margin-bottom:12px;">
+    <div class="card-hd">
+      <h2>Request {{ req.request_id }} (user {{ req.user_id }})</h2>
+      <div class="actions">
+        <a class="btn" href="/">Назад</a>
+        <button class="btn danger" onclick="deleteRequest('{{ req.user_id }}','{{ req.request_id }}')">Удалить</button>
+      </div>
+    </div>
+    <div class="card-bd">
+      <div class="grid">
+        <div>
+          <div style="margin-bottom:10px;">
+            <span class="badge {% if req.status=='done' %}ok{% elif req.status and 'failed' in req.status %}bad{% else %}warn{% endif %}">
+              {{ req.status or "-" }}
+            </span>
+            <span class="badge">Created <span class="mono">{{ req.created_h }}</span></span>
+            <span class="badge">Size <span class="mono">{{ req.total_size_h }}</span></span>
+          </div>
+
+          <div class="card" style="border-radius:12px;">
+            <div class="card-hd" style="border-radius:12px 12px 0 0;">
+              <h2>Файлы</h2>
+            </div>
+            <div class="card-bd">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Path</th>
+                    <th>Size</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                {% for f in req.files %}
+                  <tr>
+                    <td class="mono">{{ f.kind }}</td>
+                    <td class="mono">{{ f.rel_path }}</td>
+                    <td class="mono">{{ f.size_h }}</td>
+                    <td>
+                      {% if f.exists %}
+                        <a class="btn accent" href="/download/{{ req.user_id }}/{{ req.request_id }}/{{ f.name }}">Скачать</a>
+                      {% else %}
+                        <span style="color:rgba(233,238,252,0.6);">нет</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card" style="border-radius:12px;">
+            <div class="card-hd" style="border-radius:12px 12px 0 0;">
+              <h2>meta.json</h2>
+            </div>
+            <div class="card-bd">
+              <pre>{{ req.meta_pretty }}</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+{% endblock %}
