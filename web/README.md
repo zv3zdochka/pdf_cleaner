@@ -31,21 +31,16 @@ export WEB_PORT="8080"
 ```
 
 3) Запуск:
-```bash
-uvicorn web.app:app --host 0.0.0.0 --port ${WEB_PORT:-8080}
-```
-
-Открыть в браузере: `http://<server>:8080`
-
-## Запуск в Docker
-
-Можно запускать вебку:
-- в том же контейнере (как второй процесс) — быстро, но не лучший прод-паттерн;
-- отдельным контейнером — правильнее.
-
-Важно: вебка должна видеть тот же volume `STORAGE_DIR`, что и бот.
-
-## Безопасность
-
-Используется HTTP Basic Auth. Обязательно задай `WEB_USER` и `WEB_PASSWORD`.
-Для продакшена — ставь за Nginx/Traefik и добавляй HTTPS.
+docker run -d \
+  --name pdf-cleaner-web \
+  --restart always \
+  -e STORAGE_DIR="/app/storage" \
+  -e STORAGE_MAX_BYTES="32212254720" \
+  -e WEB_USER="admin" \
+  -e WEB_PASSWORD="change_me" \
+  -p 8080:8080 \
+  -v pdf_storage:/app/storage \
+  -v "$(pwd)/web:/app/web:ro" \
+  -w /app \
+  python:3.12-slim \
+  sh -c "pip install --no-cache-dir -r /app/web/requirements.txt && uvicorn web.app:app --host 0.0.0.0 --port 8080"

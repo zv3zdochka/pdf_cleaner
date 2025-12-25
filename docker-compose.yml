@@ -1,0 +1,45 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pdf-cleaner-bot
+    restart: always
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN}"
+      STORAGE_DIR: "/app/storage"
+      STORAGE_MAX_BYTES: "32212254720"     # 30 GiB
+      STORAGE_MAX_AGE_DAYS: "0"            # автоудаление выключено
+      LOG_LEVEL: "INFO"
+    volumes:
+      - pdf_storage:/app/storage
+      - pdf_logs:/app/logs
+      - pdf_work:/app/data
+    # без портов — бот наружу не торчит
+
+  web:
+    image: python:3.12-slim
+    container_name: pdf-cleaner-web
+    restart: always
+    working_dir: /app
+    depends_on:
+      - bot
+    environment:
+      STORAGE_DIR: "/app/storage"
+      STORAGE_MAX_BYTES: "32212254720"     # 30 GiB
+      WEB_USER: "${WEB_USER}"
+      WEB_PASSWORD: "${WEB_PASSWORD}"
+    volumes:
+      - pdf_storage:/app/storage:rw
+      - ./web:/app/web:ro
+    ports:
+      - "8080:8080"
+    command: >
+      sh -c "
+      pip install --no-cache-dir -r /app/web/requirements.txt &&
+      uvicorn web.app:app --host 0.0.0.0 --port 8080
+      "
+volumes:
+  pdf_storage:
+  pdf_logs:
+  pdf_work:

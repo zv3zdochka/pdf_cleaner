@@ -30,23 +30,16 @@ Telegram-бот для очистки PDF: рендерит страницы, н
 
 ## Запуск через Docker
 
-Сборка:
-
-```bash
 docker build -t pdf-cleaner-bot:latest .
-```
 
-Запуск (пример):
-
-```bash
-docker run -d       --name pdf-cleaner-bot       --restart always       -e BOT_TOKEN="PASTE_YOUR_BOT_TOKEN_HERE"       -v /opt/pdf_bot_data:/app/data       -v /opt/pdf_bot_logs:/app/logs       --memory=5g       --memory-swap=5g       pdf-cleaner-bot:latest
-```
-
-## Будущее расширение (вебка)
-
-Архитектура уже разделяет:
-- *core processing* (pdf_cleaner_bot/processor) — можно вызывать из HTTP API;
-- *transport layer* (pdf_cleaner_bot/bot) — Telegram;
-- *config* — один источник правды для обоих интерфейсов.
-
-Для веб-слоя логично добавить `pdf_cleaner_bot/web/` (FastAPI) и переиспользовать `PDFRegionProcessor`.
+docker run -d \
+  --name pdf-cleaner-bot \
+  --restart always \
+  -e BOT_TOKEN="..." \
+  -e STORAGE_DIR="/app/storage" \
+  -e STORAGE_MAX_BYTES="32212254720" \
+  -e STORAGE_MAX_AGE_DAYS="0" \
+  -v pdf_storage:/app/storage \
+  -v pdf_logs:/app/logs \
+  -v pdf_work:/app/data \
+  pdf-cleaner-bot:latest
