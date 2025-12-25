@@ -22,6 +22,11 @@ COPY weights.onnx ./weights.onnx
 # Folders for temporary files and logs
 RUN mkdir -p /app/data && mkdir -p /app/logs
 
+RUN mkdir -p /app/data && mkdir -p /app/logs && mkdir -p /app/storage
+
+
+VOLUME ["/app/storage"]
+
 VOLUME ["/app/data"]
 VOLUME ["/app/logs"]
 
