@@ -1,0 +1,9 @@
+# Keep your existing pinned versions here.
+# This file is included as a placeholder; replace with your current requirements.txt.
+aiogram>=3.0
+pymupdf
+pillow
+opencv-python-headless
+numpy
+pikepdf
+onnxruntime
