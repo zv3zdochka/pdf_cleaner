@@ -6,14 +6,16 @@ import logging
 from aiogram import Dispatcher, F
 from aiogram.filters import CommandStart
 
-from pdf_cleaner_bot.bot.handlers import cmd_start, handle_document
+from pdf_cleaner_bot.bot.handlers import (
+    cmd_start,
+    handle_callback,
+    handle_document,
+    handle_pages_text,
+)
 from pdf_cleaner_bot.storage.manager import StorageConfig, StorageManager
 
 
 def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
-    """
-    Build and configure aiogram dispatcher with injected dependencies.
-    """
     dp = Dispatcher()
 
     process_lock = asyncio.Lock()
@@ -22,18 +24,30 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
         StorageConfig(
             root_dir=settings.storage_dir,
             max_bytes=settings.storage_max_bytes,
-            max_age_days=settings.storage_max_age_days,  # keep 0 => TTL disabled
+            max_age_days=settings.storage_max_age_days,
         ),
         logger=logging.getLogger("pdf_cleaner.storage"),
     )
 
+    # /start
     dp.message.register(cmd_start, CommandStart())
 
+    # PDF document -> store + show card with buttons
     async def _doc_handler(message):
-        # aiogram v3 гарантирует message.bot
         return await handle_document(
             message,
             message.bot,
+            telegram_max_file_size=settings.telegram_max_file_size,
+            internal_max_file_size=settings.internal_max_file_size,
+            storage=storage,
+        )
+
+    dp.message.register(_doc_handler, F.document)
+
+    # Inline buttons callbacks
+    async def _cb_handler(query):
+        return await handle_callback(
+            query,
             processor=processor,
             shrink_pdf=shrink_pdf,
             process_lock=process_lock,
@@ -42,5 +56,16 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
             storage=storage,
         )
 
-    dp.message.register(_doc_handler, F.document)
+    dp.callback_query.register(_cb_handler, F.data.startswith("pdfc:"))
+
+    # Text input for pages (only when user is in pending state)
+    async def _pages_text_handler(message):
+        return await handle_pages_text(
+            message,
+            storage=storage,
+        )
+
+    # Только обычный текст (не команды)
+    dp.message.register(_pages_text_handler, F.text & ~F.text.startswith("/"))
+
     return dp
