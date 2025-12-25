@@ -1,45 +1,41 @@
 services:
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: pdf-cleaner-bot
     restart: always
     environment:
-      BOT_TOKEN: "${BOT_TOKEN}"
-      STORAGE_DIR: "/app/storage"
-      STORAGE_MAX_BYTES: "32212254720"     # 30 GiB
-      STORAGE_MAX_AGE_DAYS: "0"            # автоудаление выключено
-      LOG_LEVEL: "INFO"
+      BOT_TOKEN: ${BOT_TOKEN}
+      MODEL_PATH: /app/weights.onnx
+
+      # единое хранилище для бота и вебки
+      STORAGE_DIR: /app/storage
+
+      # 30 GiB лимит (без авто-удалений, см. правки к боту ниже)
+      STORAGE_MAX_BYTES: 32212254720
+      STORAGE_MAX_AGE_DAYS: 0
+
+      LOGS_DIR: /app/logs
+      LOG_LEVEL: INFO
     volumes:
-      - pdf_storage:/app/storage
-      - pdf_logs:/app/logs
-      - pdf_work:/app/data
-    # без портов — бот наружу не торчит
+      - /opt/pdf_bot_storage:/app/storage
+      - /opt/pdf_bot_logs:/app/logs
+    mem_limit: 5g
+    memswap_limit: 5g
 
   web:
-    image: python:3.12-slim
+    build: ./web
     container_name: pdf-cleaner-web
     restart: always
-    working_dir: /app
+    environment:
+      STORAGE_DIR: /app/storage
+      STORAGE_MAX_BYTES: 32212254720
+
+      # опционально: защита вебки токеном
+      WEB_TOKEN: ${WEB_TOKEN:-}
+      WEB_PORT: 8000
+    volumes:
+      - /opt/pdf_bot_storage:/app/storage
+    ports:
+      - "8081:8000"
     depends_on:
       - bot
-    environment:
-      STORAGE_DIR: "/app/storage"
-      STORAGE_MAX_BYTES: "32212254720"     # 30 GiB
-      WEB_USER: "${WEB_USER}"
-      WEB_PASSWORD: "${WEB_PASSWORD}"
-    volumes:
-      - pdf_storage:/app/storage:rw
-      - ./web:/app/web:ro
-    ports:
-      - "8080:8080"
-    command: >
-      sh -c "
-      pip install --no-cache-dir -r /app/web/requirements.txt &&
-      uvicorn web.app:app --host 0.0.0.0 --port 8080
-      "
-volumes:
-  pdf_storage:
-  pdf_logs:
-  pdf_work:

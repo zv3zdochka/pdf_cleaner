@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF Cleaner — Storage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div class="max-w-7xl mx-auto px-4 py-6">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h1 class="text-2xl font-semibold">PDF Cleaner Storage</h1>
+        <p class="text-sm text-slate-600 mt-1">
+          Хранилище: <span class="font-medium">{{ usage_h }}</span> / <span class="font-medium">{{ limit_h }}</span>
+        </p>
+      </div>
+      <form method="get" class="flex gap-2 w-full sm:w-auto">
+        <input name="q" value="{{ q }}" placeholder="Поиск: user_id, request_id, файл, статус"
+               class="w-full sm:w-96 rounded-xl border border-slate-200 px-3 py-2 bg-white shadow-sm focus:outline-none focus:ring-2 focus:ring-slate-300" />
+        <button class="rounded-xl px-4 py-2 bg-slate-900 text-white shadow-sm hover:bg-slate-800">
+          Искать
+        </button>
+      </form>
+    </div>
+
+    <div class="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+      <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+        <div class="text-sm text-slate-600">
+          Найдено: <span class="font-medium text-slate-900">{{ items|length }}</span>
+        </div>
+        <div class="text-xs text-slate-500">
+          Если задан WEB_TOKEN: открой страницу как <code class="px-1 py-0.5 bg-slate-100 rounded">/?token=...</code> (cookie сохранится), либо передай header <code class="px-1 py-0.5 bg-slate-100 rounded">X-Admin-Token</code>
+        </div>
+      </div>
+
+      {% if items|length == 0 %}
+      <div class="p-10 text-center text-slate-600">
+        Пока нет сохранённых файлов.
+      </div>
+      {% else %}
+      <div class="divide-y divide-slate-100">
+        {% for it in items %}
+        <div class="p-4 hover:bg-slate-50">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div class="min-w-0">
+              <div class="flex flex-wrap items-center gap-2">
+                <div class="font-semibold truncate">
+                  {{ it.original_filename }}
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                  user_id: {{ it.user_id }}
+                </span>
+                <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                  request_id: {{ it.request_id }}
+                </span>
+                <span class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                  {{ it.status }}
+                </span>
+              </div>
+
+              <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm text-slate-600">
+                <div>
+                  <div class="text-xs uppercase text-slate-400">created</div>
+                  <div class="font-medium text-slate-700">{{ it.created_at_h }}</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-400">mtime</div>
+                  <div class="font-medium text-slate-700">{{ it.mtime_h }}</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-400">input</div>
+                  <div class="font-medium text-slate-700">{{ it.files.input.size_h }}</div>
+                </div>
+                <div>
+                  <div class="text-xs uppercase text-slate-400">output</div>
+                  <div class="font-medium text-slate-700">{{ it.files.cleaned_small.size_h }}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-2 lg:justify-end">
+              {% if it.files.input.exists %}
+              <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                 href="/download/{{ it.user_id }}/{{ it.request_id }}/input">
+                Скачать input
+              </a>
+              {% endif %}
+
+              {% if it.files.cleaned.exists %}
+              <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                 href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned">
+                Скачать cleaned
+              </a>
+              {% endif %}
+
+              {% if it.files.cleaned_small.exists %}
+              <a class="px-3 py-2 rounded-xl bg-slate-900 text-white shadow-sm hover:bg-slate-800 text-sm rounded-xl"
+                 href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned_small">
+                Скачать cleaned_small
+              </a>
+              {% endif %}
+
+              <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                 href="/download/{{ it.user_id }}/{{ it.request_id }}/meta">
+                meta.json
+              </a>
+
+              <button class="px-3 py-2 rounded-xl bg-rose-600 text-white shadow-sm hover:bg-rose-500 text-sm"
+                      onclick="delReq('{{ it.user_id }}','{{ it.request_id }}')">
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="mt-6 text-xs text-slate-500">
+      Удаление удаляет request целиком (навсегда): input / cleaned / cleaned_small / meta.json.
+    </div>
+  </div>
+
+<script>
+async function delReq(userId, requestId) {
+  const ok = confirm(`Удалить навсегда request ${requestId} (user ${userId})?`);
+  if (!ok) return;
+
+  const resp = await fetch(`/api/requests/${encodeURIComponent(userId)}/${encodeURIComponent(requestId)}`, {
+    method: "DELETE",
+    headers: { "Accept": "application/json" }
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    alert("Ошибка удаления: " + t);
+    return;
+  }
+  location.reload();
+}
+</script>
+</body>
+</html>
