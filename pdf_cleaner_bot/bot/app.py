@@ -1,49 +1,46 @@
-"""Bot application wiring (dispatcher, dependencies, polling)."""
-
-from __future__ import annotations
-
 import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import CommandStart
 
-from pdf_cleaner_bot.config import AppConfig
-from pdf_cleaner_bot.processor import PDFRegionProcessor
-from pdf_cleaner_bot.bot.handlers import BotHandlers
+from pdf_cleaner_bot.storage.manager import StorageManager, StorageConfig
+from pdf_cleaner_bot.bot.handlers import cmd_start, handle_document
 
 
-def build_processor(cfg: AppConfig) -> PDFRegionProcessor:
-    """Create and configure the global PDF processor instance."""
-    return PDFRegionProcessor(
-        model_path=cfg.model.model_path,
-        input_size=cfg.model.input_size,
-        conf_threshold=cfg.model.conf_threshold,
-        render_zoom=cfg.model.render_zoom,
-        providers=cfg.model.providers,
-    )
-
-
-async def run_bot(cfg: AppConfig) -> None:
-    """Run aiogram polling loop."""
-    if not cfg.bot_token:
-        raise RuntimeError("BOT_TOKEN is empty. Provide it via environment variables.")
-
-    bot = Bot(cfg.bot_token)
+def build_dispatcher(
+    *,
+    processor,
+    shrink_pdf,
+    settings,
+) -> Dispatcher:
     dp = Dispatcher()
 
     process_lock = asyncio.Lock()
-    processor = build_processor(cfg)
-    handlers = BotHandlers(
-        processor=processor,
-        work_dir=cfg.work_dir,
-        telegram_max_file_size=cfg.limits.telegram_max_file_size,
-        internal_max_file_size=cfg.limits.internal_max_file_size,
-        process_lock=process_lock,
+
+    storage = StorageManager(
+        StorageConfig(
+            root_dir=settings.storage_dir,
+            max_bytes=settings.storage_max_bytes,
+            max_age_days=settings.storage_max_age_days,
+        ),
+        logger=logging.getLogger("pdf_cleaner.storage"),
     )
 
-    dp.message.register(handlers.cmd_start, CommandStart())
-    dp.message.register(handlers.handle_document, F.document)
+    dp.message.register(cmd_start, CommandStart())
 
-    logging.getLogger("Main").info("Bot started. Waiting for updates...")
-    await dp.start_polling(bot)
+    # lambda-обвязка, чтобы пробросить зависимости и не менять сигнатуры aiogram
+    dp.message.register(
+        lambda m, b: handle_document(
+            m,
+            b,
+            processor=processor,
+            shrink_pdf=shrink_pdf,
+            process_lock=process_lock,
+            telegram_max_file_size=settings.telegram_max_file_size,
+            internal_max_file_size=settings.internal_max_file_size,
+            storage=storage,
+        ),
+        F.document,
+    )
+    return dp
