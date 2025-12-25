@@ -109,37 +109,22 @@ class StorageManager:
 
     def cleanup(self) -> None:
         """
-        Run retention + quota enforcement. Safe to call often.
+        Retention is disabled by design (manual deletion via web UI).
+        If max_age_days > 0 you can optionally enable TTL cleanup, but
+        quota cleanup (auto-delete) is intentionally NOT performed.
         """
         self.cfg.root_dir.mkdir(parents=True, exist_ok=True)
 
-        now = time.time()
+        # TTL optional (only if max_age_days > 0)
         max_age_sec = max(0, self.cfg.max_age_days) * 86400
-
-        # 1) TTL cleanup
-        if max_age_sec > 0:
-            for req_dir in list(self.list_request_dirs()):
-                age = now - self._request_mtime(req_dir)
-                if age > max_age_sec:
-                    self._delete_request_dir(req_dir, reason="ttl_expired")
-
-        # 2) Quota enforcement
-        if self.cfg.max_bytes <= 0:
+        if max_age_sec <= 0:
             return
 
-        total = self.total_size_bytes()
-        if total <= self.cfg.max_bytes:
-            return
-
-        # Sort requests by mtime oldest first
-        reqs = sorted(list(self.list_request_dirs()), key=self._request_mtime)
-
-        for req_dir in reqs:
-            if total <= self.cfg.max_bytes:
-                break
-            sz = self._dir_size_bytes(req_dir)
-            self._delete_request_dir(req_dir, reason="quota_enforcement")
-            total -= sz
+        now = time.time()
+        for req_dir in list(self.list_request_dirs()):
+            age = now - self._request_mtime(req_dir)
+            if age > max_age_sec:
+                self._delete_request_dir(req_dir, reason="ttl_expired")
 
     def _delete_request_dir(self, req_dir: Path, reason: str) -> None:
         try:
@@ -148,6 +133,12 @@ class StorageManager:
             self._prune_empty_parents(req_dir)
         except Exception as e:
             self.log.warning("Storage cleanup failed for %s: %s", req_dir, e)
+
+    def would_exceed_quota(self, add_bytes: int = 0) -> bool:
+        if self.cfg.max_bytes <= 0:
+            return False
+        add = max(0, int(add_bytes))
+        return (self.total_size_bytes() + add) > self.cfg.max_bytes
 
     def _prune_empty_parents(self, req_dir: Path) -> None:
         """

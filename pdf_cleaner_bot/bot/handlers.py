@@ -7,24 +7,23 @@ import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from aiogram.types import Message, FSInputFile
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import FSInputFile, Message
 
-# добавь эти импорты
-from pdf_cleaner_bot.storage.manager import StorageManager, StorageConfig
+from pdf_cleaner_bot.storage.manager import StorageManager
 
 
 async def handle_document(
-    message: Message,
-    bot: Bot,
-    *,
-    processor,
-    shrink_pdf,
-    process_lock: asyncio.Lock,
-    telegram_max_file_size: int,
-    internal_max_file_size: int,
-    storage: StorageManager,
+        message: Message,
+        bot: Bot,
+        *,
+        processor,
+        shrink_pdf,
+        process_lock: asyncio.Lock,
+        telegram_max_file_size: int,
+        internal_max_file_size: int,
+        storage: StorageManager,
 ) -> None:
     document = message.document
     if not document:
@@ -35,12 +34,6 @@ async def handle_document(
     file_size = document.file_size or 0
 
     log = logging.getLogger("pdf_cleaner.bot.handlers")
-
-    # Best-effort cleanup before accepting new work
-    try:
-        storage.cleanup()
-    except Exception:
-        pass
 
     # 1) Hard Telegram limit
     if file_size > telegram_max_file_size:
@@ -61,7 +54,17 @@ async def handle_document(
         await message.reply("Пожалуйста, пришлите PDF-файл.")
         return
 
-    await message.reply("Файл получен, начинаю обработку. На больших документах это может занять время...")
+    # 3) Storage quota guard (no auto-deletion, just refuse)
+    if storage.would_exceed_quota(file_size):
+        await message.reply(
+            "Хранилище на сервере заполнено (лимит 30 ГБ). "
+            "Удалите старые файлы через веб-интерфейс и попробуйте снова."
+        )
+        return
+
+    await message.reply(
+        "Файл получен, начинаю обработку. На больших документах это может занять время..."
+    )
 
     request_id = uuid.uuid4().hex
     req_dir = storage.request_dir(user_id, request_id)
@@ -77,6 +80,7 @@ async def handle_document(
         "original_filename": original_filename,
         "status": "received",
         "created_at": int(time.time()),
+        "updated_at": int(time.time()),
         "input": {"path": str(input_path.relative_to(storage.cfg.root_dir))},
         "output": {},
         "errors": [],
@@ -92,6 +96,7 @@ async def handle_document(
     except TelegramBadRequest as e:
         adapter.exception("TelegramBadRequest on get_file: %s", e)
         base_meta["status"] = "failed_get_file"
+        base_meta["updated_at"] = int(time.time())
         base_meta["errors"].append({"stage": "get_file", "error": str(e)})
         storage.write_meta(user_id, request_id, base_meta)
         await message.reply("Telegram отказался отдавать файл (скорее всего, он слишком большой).")
@@ -101,31 +106,48 @@ async def handle_document(
     adapter.info("Downloaded to %s", input_path)
 
     base_meta["status"] = "downloaded"
+    base_meta["updated_at"] = int(time.time())
     base_meta["input"]["size_bytes"] = input_path.stat().st_size if input_path.exists() else 0
     storage.write_meta(user_id, request_id, base_meta)
 
     try:
         async with process_lock:
             base_meta["status"] = "processing"
+            base_meta["updated_at"] = int(time.time())
             storage.write_meta(user_id, request_id, base_meta)
 
             # Run heavy PDF processing
+            cleaned_pdf_path = req_dir / "cleaned.pdf"
             cleaned_path = await asyncio.to_thread(
                 processor.process_pdf,
                 pdf_path=input_path,
-                output_path=req_dir / "cleaned.pdf",
+                output_path=cleaned_pdf_path,
             )
 
             # Shrink
             final_path = req_dir / "cleaned_small.pdf"
             await asyncio.to_thread(shrink_pdf, cleaned_path, final_path)
 
+            # Quota guard after outputs are generated (rollback current request only)
+            if storage.would_exceed_quota(0):
+                import shutil
+
+                shutil.rmtree(req_dir, ignore_errors=True)
+                await message.reply(
+                    "После обработки хранилище превысило лимит 30 ГБ. "
+                    "Результат не сохранён. Удалите старые файлы в вебке и повторите."
+                )
+                return
+
         # Update meta
         base_meta["status"] = "done"
+        base_meta["updated_at"] = int(time.time())
         base_meta["output"] = {
             "cleaned": {
                 "path": str((req_dir / "cleaned.pdf").relative_to(storage.cfg.root_dir)),
-                "size_bytes": (req_dir / "cleaned.pdf").stat().st_size if (req_dir / "cleaned.pdf").exists() else 0,
+                "size_bytes": (req_dir / "cleaned.pdf").stat().st_size
+                if (req_dir / "cleaned.pdf").exists()
+                else 0,
             },
             "cleaned_small": {
                 "path": str(final_path.relative_to(storage.cfg.root_dir)),
@@ -134,18 +156,19 @@ async def handle_document(
         }
         storage.write_meta(user_id, request_id, base_meta)
 
-        adapter.info("Processing finished. final=%s bytes=%s", final_path, final_path.stat().st_size)
+        final_size = final_path.stat().st_size if final_path and final_path.exists() else 0
+        adapter.info("Processing finished. final=%s bytes=%s", final_path, final_size)
 
         # Telegram output size check
-        result_size = final_path.stat().st_size if final_path and final_path.exists() else 0
-        if result_size > telegram_max_file_size:
+        if final_size > telegram_max_file_size:
             await message.reply(
                 "Обработанный PDF получился больше лимита Telegram (≈50 МБ), "
                 "поэтому я не могу отправить его обратно через бот.\n\n"
-                "Файл сохранён на сервере. Позже можно будет скачать его через веб-интерфейс."
+                "Файл сохранён на сервере. Его можно скачать через веб-интерфейс."
             )
             return
 
+        # Send processed file back to user with original filename
         await message.reply_document(
             FSInputFile(path=str(final_path), filename=original_filename),
             caption="Готово! Вот ваш обработанный PDF.",
@@ -154,13 +177,10 @@ async def handle_document(
     except Exception as e:
         adapter.exception("Error while processing PDF: %s", e)
         base_meta["status"] = "failed_processing"
+        base_meta["updated_at"] = int(time.time())
         base_meta["errors"].append({"stage": "processing", "error": str(e)})
         storage.write_meta(user_id, request_id, base_meta)
         await message.reply("Произошла ошибка при обработке PDF. Проверьте лог сервера.")
     finally:
-        # IMPORTANT: больше НЕ удаляем вход/выход — они остаются для вебки
-        # Но запускаем уборку по квоте/TTL
-        try:
-            storage.cleanup()
-        except Exception:
-            pass
+        # Intentionally keep all files for the web UI (manual deletion only).
+        pass
