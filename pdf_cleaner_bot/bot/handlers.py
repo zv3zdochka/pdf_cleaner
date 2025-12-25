@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict
 
 import fitz  # PyMuPDF
 from aiogram import Bot
@@ -23,8 +23,15 @@ from aiogram.types import (
 
 from pdf_cleaner_bot.storage.manager import StorageManager
 
-# user_id -> request_id (ожидание ввода строкой страниц)
-_PENDING_PAGES_INPUT: Dict[int, str] = {}
+
+class PendingPages(TypedDict):
+    request_id: str
+    chat_id: int
+    prompt_message_id: int
+
+
+# user_id -> {request_id, chat_id, prompt_message_id}
+_PENDING_PAGES_INPUT: Dict[int, PendingPages] = {}
 
 
 def _human_bytes(n: int) -> str:
@@ -40,10 +47,21 @@ def _human_bytes(n: int) -> str:
 
 
 def _kb_for_request(request_id: str) -> InlineKeyboardMarkup:
+    """
+    Row1: actions
+    Row2: downloads (3 buttons)
+    """
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="✅ Обработать", callback_data=f"pdfc:proc:{request_id}")],
-            [InlineKeyboardButton(text="🗑 Задать страницы для удаления", callback_data=f"pdfc:pages:{request_id}")],
+            [
+                InlineKeyboardButton(text="✅ Обработать", callback_data=f"pdfc:proc:{request_id}"),
+                InlineKeyboardButton(text="🗑 Страницы", callback_data=f"pdfc:pages:{request_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="⬇️ Исходный", callback_data=f"pdfc:dl:{request_id}:orig"),
+                InlineKeyboardButton(text="⬇️ Обрезанный", callback_data=f"pdfc:dl:{request_id}:trim"),
+                InlineKeyboardButton(text="⬇️ Обработанный", callback_data=f"pdfc:dl:{request_id}:proc"),
+            ],
         ]
     )
 
@@ -52,6 +70,7 @@ def _parse_pages_spec(spec: str, max_page: int) -> List[int]:
     """
     "1, 2, 4-6" -> [1,2,4,5,6] (1-based)
     строгая валидация: любая страница вне 1..max_page -> ошибка
+    пересечения/дубликаты -> норм (через set)
     """
     s = (spec or "").strip()
     if not s or s in {"0", "нет", "none", "no"}:
@@ -119,12 +138,13 @@ def _remove_pages_copy(
     old_n = src.page_count
 
     if not pages_to_delete_1based:
-        # если страниц нет — просто копируем целиком
         dst = fitz.open()
         dst.insert_pdf(src)
-        dst.save(dst_pdf, garbage=3, deflate=True, clean=True)
+        tmp = dst_pdf.with_suffix(".tmp.pdf")
+        dst.save(tmp, garbage=3, deflate=True, clean=True)
         dst.close()
         src.close()
+        tmp.replace(dst_pdf)
         return old_n, old_n
 
     del_set = set(pages_to_delete_1based)
@@ -159,8 +179,7 @@ def _split_pdf_to_parts_under_limit(
     src = fitz.open(pdf_path)
     n = src.page_count
 
-    # небольшой запас
-    limit = max(1, int(max_bytes) - 256 * 1024)
+    limit = max(1, int(max_bytes) - 256 * 1024)  # небольшой запас
 
     parts: List[Path] = []
     cur_pages: List[int] = []
@@ -221,12 +240,111 @@ def _split_pdf_to_parts_under_limit(
     return parts
 
 
+def _fmt_time_utc(ts: int) -> str:
+    if not ts:
+        return "-"
+    return datetime.utcfromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _build_card_text(meta: Dict[str, Any]) -> str:
+    original_filename = meta.get("original_filename") or "document.pdf"
+    status = meta.get("status") or "unknown"
+
+    created_at = int(meta.get("telegram_received_at") or meta.get("created_at") or 0)
+
+    pages_orig = meta.get("pages_total_original")
+    pages_eff = meta.get("pages_total_effective")
+
+    inp_orig = ((meta.get("input") or {}).get("original") or {})
+    size_bytes = int(inp_orig.get("size_bytes") or 0)
+
+    pages_to_delete = meta.get("pages_to_delete") or []
+    if isinstance(pages_to_delete, str):
+        pages_to_delete = []
+
+    lines = [
+        "Файл сохранён.",
+        "",
+        f"Имя: {original_filename}",
+        f"Размер: {_human_bytes(size_bytes)}",
+        f"Страниц: {pages_orig if pages_orig is not None else '-'}"
+        + (f" → {pages_eff}" if pages_eff is not None and pages_eff != pages_orig else ""),
+        f"Время: {_fmt_time_utc(created_at)} (UTC)",
+        f"Статус: {status}",
+    ]
+
+    if pages_to_delete:
+        lines.append(f"Удаляем страницы: {pages_to_delete}")
+
+    lines.append("")
+    lines.append("Выберите действие:")
+    return "\n".join(lines)
+
+
+async def _send_pdf_to_chat(
+    *,
+    bot: Bot,
+    chat_id: int,
+    path: Path,
+    filename: str,
+    caption: Optional[str],
+    telegram_max_file_size: int,
+    request_id: str,
+    logger: logging.LoggerAdapter,
+) -> None:
+    if not path.exists():
+        await bot.send_message(chat_id, "Файл не найден на сервере.")
+        return
+
+    sz = path.stat().st_size
+    if sz <= telegram_max_file_size:
+        await bot.send_document(
+            chat_id=chat_id,
+            document=FSInputFile(path=str(path), filename=filename),
+            caption=caption,
+        )
+        return
+
+    # if too big -> split, else fallback to web
+    tmp_dir = Path("/tmp") / f"pdf_send_parts_{request_id}_{uuid.uuid4().hex}"
+    stem = Path(filename).stem
+    try:
+        parts_paths = _split_pdf_to_parts_under_limit(
+            path,
+            max_bytes=telegram_max_file_size,
+            tmp_root=tmp_dir,
+            base_filename_stem=stem,
+            logger=logger,
+        )
+    except Exception as e:
+        logger.exception("Split failed: %s", e)
+        await bot.send_message(
+            chat_id,
+            "Файл слишком большой для Telegram и не удалось корректно его раздробить. Скачайте через веб-интерфейс.",
+        )
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
+
+    total_parts = len(parts_paths)
+    for idx, p in enumerate(parts_paths, start=1):
+        cap = caption if (idx == 1 and caption) else None
+        cap2 = cap or f"Часть {idx}/{total_parts}."
+        await bot.send_document(
+            chat_id=chat_id,
+            document=FSInputFile(path=str(p), filename=p.name),
+            caption=cap2,
+        )
+
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 async def cmd_start(message: Message) -> None:
     await message.answer(
         "Привет! Пришли PDF.\n\n"
         "Я сохраню его и покажу карточку (имя/размер/страницы/время) + кнопки:\n"
         "— Обработать\n"
-        "— Задать страницы для удаления\n\n"
+        "— Задать страницы для удаления\n"
+        "— Скачать исходный/обрезанный/обработанный\n\n"
         "Файлы хранятся на сервере и доступны через веб-интерфейс."
     )
 
@@ -239,12 +357,6 @@ async def handle_document(
     internal_max_file_size: int,
     storage: StorageManager,
 ) -> None:
-    """
-    При получении PDF:
-      - сохраняем input_original.pdf
-      - пишем meta
-      - показываем карточку + кнопки
-    """
     document = message.document
     if not document:
         return
@@ -270,7 +382,6 @@ async def handle_document(
         await message.reply("Пожалуйста, пришлите PDF-файл.")
         return
 
-    # квота до скачивания (примерно оцениваем +file_size)
     if storage.would_exceed_quota(file_size):
         await message.reply(
             "Хранилище на сервере заполнено (лимит 30 ГБ). "
@@ -283,9 +394,6 @@ async def handle_document(
     rd.mkdir(parents=True, exist_ok=True)
 
     input_original = rd / "input_original.pdf"
-    input_trimmed = rd / "input_trimmed.pdf"
-    cleaned = rd / "cleaned.pdf"
-    cleaned_small = rd / "cleaned_small.pdf"
 
     meta: Dict[str, Any] = {
         "request_id": request_id,
@@ -293,6 +401,7 @@ async def handle_document(
         "original_filename": original_filename,
         "status": "received",
         "created_at": int(time.time()),
+        "telegram_received_at": int(message.date.timestamp()) if message.date else int(time.time()),
         "updated_at": int(time.time()),
         "pages_total_original": None,
         "pages_total_effective": None,
@@ -309,7 +418,6 @@ async def handle_document(
     adapter = logging.LoggerAdapter(log, {"request_id": request_id})
     adapter.info("Incoming file: name=%s size=%s bytes", original_filename, file_size)
 
-    # download
     try:
         tg_file = await bot.get_file(document.file_id)
     except TelegramBadRequest as e:
@@ -323,7 +431,6 @@ async def handle_document(
 
     await bot.download_file(tg_file.file_path, destination=input_original)
 
-    # page count
     try:
         pages_total = _pdf_page_count(input_original)
     except Exception as e:
@@ -335,30 +442,14 @@ async def handle_document(
         await message.reply("Не смог открыть PDF (возможно файл повреждён).")
         return
 
-    # update meta
     meta["status"] = "ready"
     meta["updated_at"] = int(time.time())
     meta["pages_total_original"] = pages_total
     meta["pages_total_effective"] = pages_total
     meta["input"]["original"]["size_bytes"] = input_original.stat().st_size if input_original.exists() else 0
-    meta["input"]["trimmed"] = None
-    meta["output"] = {}
     storage.write_meta(user_id, request_id, meta)
 
-    # show card
-    sent_dt = message.date
-    sent_str = sent_dt.strftime("%Y-%m-%d %H:%M:%S") if sent_dt else datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    size_str = _human_bytes(int(meta["input"]["original"]["size_bytes"]))
-
-    text = (
-        "Файл сохранён.\n\n"
-        f"Имя: {original_filename}\n"
-        f"Размер: {size_str}\n"
-        f"Страниц: {pages_total}\n"
-        f"Время: {sent_str} (UTC)\n\n"
-        "Выберите действие:"
-    )
-    await message.reply(text, reply_markup=_kb_for_request(request_id))
+    await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
 
 
 async def handle_pages_text(
@@ -366,19 +457,23 @@ async def handle_pages_text(
     *,
     storage: StorageManager,
 ) -> None:
-    """
-    Пользователь вводит строку страниц.
-    Мы создаём input_trimmed.pdf как отдельную копию.
-    """
     user_id = message.from_user.id if message.from_user else 0
-    if user_id not in _PENDING_PAGES_INPUT:
+    pending = _PENDING_PAGES_INPUT.get(user_id)
+    if not pending:
         return
 
-    request_id = _PENDING_PAGES_INPUT[user_id]
+    request_id = pending["request_id"]
     rd = storage.request_dir(user_id, request_id)
     meta = storage.read_meta(user_id, request_id) or {}
+
     input_original = rd / "input_original.pdf"
     input_trimmed = rd / "input_trimmed.pdf"
+
+    # delete prompt message (best-effort)
+    try:
+        await message.bot.delete_message(chat_id=pending["chat_id"], message_id=pending["prompt_message_id"])
+    except Exception:
+        pass
 
     if not input_original.exists():
         _PENDING_PAGES_INPUT.pop(user_id, None)
@@ -410,11 +505,9 @@ async def handle_pages_text(
     log = logging.getLogger("pdf_cleaner.bot.handlers")
     adapter = logging.LoggerAdapter(log, {"request_id": request_id})
 
-    # Если очищаем список (pages == []): удаляем trimmed-файл (если был) и сбрасываем output
+    # If pages cleared -> remove trimmed and outputs
     if not pages:
         input_trimmed.unlink(missing_ok=True)
-
-        # также удалим старые результаты, чтобы не было путаницы
         (rd / "cleaned.pdf").unlink(missing_ok=True)
         (rd / "cleaned_small.pdf").unlink(missing_ok=True)
 
@@ -427,10 +520,10 @@ async def handle_pages_text(
         storage.write_meta(user_id, request_id, meta)
 
         _PENDING_PAGES_INPUT.pop(user_id, None)
-        await message.reply("Ок. Список удаления очищен.\n\nНажмите «Обработать».", reply_markup=_kb_for_request(request_id))
+        await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
         return
 
-    # Оценка по квоте: создание копии может быть ~размера оригинала (консервативно)
+    # Conservative quota check: trimmed copy can be near original size
     orig_size = input_original.stat().st_size if input_original.exists() else 0
     if storage.would_exceed_quota(orig_size):
         await message.reply(
@@ -439,11 +532,10 @@ async def handle_pages_text(
         )
         return
 
-    # При изменении списка страниц удаляем старые результаты обработки (иначе несоответствие)
+    # Remove old outputs (otherwise mismatch with new trimmed)
     (rd / "cleaned.pdf").unlink(missing_ok=True)
     (rd / "cleaned_small.pdf").unlink(missing_ok=True)
 
-    # Создаём trimmed-копию
     try:
         old_n, new_n = _remove_pages_copy(input_original, input_trimmed, pages)
     except Exception as e:
@@ -466,13 +558,7 @@ async def handle_pages_text(
     storage.write_meta(user_id, request_id, meta)
 
     _PENDING_PAGES_INPUT.pop(user_id, None)
-
-    await message.reply(
-        f"Ок. Сохранил обрезанную копию (страниц было {old_n}, стало {new_n}).\n"
-        f"Удалены страницы: {pages}\n\n"
-        "Нажмите «Обработать».",
-        reply_markup=_kb_for_request(request_id),
-    )
+    await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
 
 
 async def handle_callback(
@@ -482,31 +568,25 @@ async def handle_callback(
     shrink_pdf,
     process_lock: asyncio.Lock,
     telegram_max_file_size: int,
-    internal_max_file_size: int,  # не используется, оставлено для совместимости
+    internal_max_file_size: int,  # оставлено для совместимости
     storage: StorageManager,
 ) -> None:
     await query.answer()
-
-    # Удаляем сообщение с кнопками (best-effort)
-    try:
-        if query.message:
-            await query.message.delete()
-    except TelegramBadRequest:
-        pass
-    except Exception:
-        pass
 
     data = (query.data or "").strip()
     if not data.startswith("pdfc:"):
         return
 
     parts = data.split(":")
-    if len(parts) != 3:
+    if len(parts) < 3:
         return
 
     action = parts[1]
     request_id = parts[2]
+    kind = parts[3] if (action == "dl" and len(parts) >= 4) else ""
+
     user_id = query.from_user.id if query.from_user else 0
+    chat_id = query.message.chat.id if query.message else user_id
 
     log = logging.getLogger("pdf_cleaner.bot.handlers")
     adapter = logging.LoggerAdapter(log, {"request_id": request_id})
@@ -519,80 +599,154 @@ async def handle_callback(
 
     meta = storage.read_meta(user_id, request_id) or {}
     original_filename = meta.get("original_filename") or "document.pdf"
+    stem = Path(original_filename).stem
 
-    if action == "pages":
-        if not input_original.exists():
-            await query.bot.send_message(user_id, "Исходный файл не найден. Отправьте PDF заново.")
+    # -------------------------
+    # Downloads (DO NOT delete card message)
+    # -------------------------
+    if action == "dl":
+        if kind == "orig":
+            if not input_original.exists():
+                await query.answer("Исходный файл не найден.", show_alert=True)
+                return
+            await _send_pdf_to_chat(
+                bot=query.bot,
+                chat_id=chat_id,
+                path=input_original,
+                filename=original_filename,
+                caption="Исходный файл.",
+                telegram_max_file_size=telegram_max_file_size,
+                request_id=request_id,
+                logger=adapter,
+            )
             return
 
-        _PENDING_PAGES_INPUT[user_id] = request_id
+        if kind == "trim":
+            if not input_trimmed.exists():
+                await query.answer("Обрезанный файл ещё не создан. Сначала задайте страницы.", show_alert=True)
+                return
+            await _send_pdf_to_chat(
+                bot=query.bot,
+                chat_id=chat_id,
+                path=input_trimmed,
+                filename=f"{stem}_trimmed.pdf",
+                caption="Обрезанная копия (ещё не обработана).",
+                telegram_max_file_size=telegram_max_file_size,
+                request_id=request_id,
+                logger=adapter,
+            )
+            return
+
+        if kind == "proc":
+            if not cleaned_small.exists():
+                await query.answer("Обработанный файл ещё не готов. Нажмите «Обработать».", show_alert=True)
+                return
+            await _send_pdf_to_chat(
+                bot=query.bot,
+                chat_id=chat_id,
+                path=cleaned_small,
+                filename=original_filename,
+                caption="Обработанный файл (после сжатия).",
+                telegram_max_file_size=telegram_max_file_size,
+                request_id=request_id,
+                logger=adapter,
+            )
+            return
+
+        await query.answer("Неизвестный тип файла.", show_alert=True)
+        return
+
+    # -------------------------
+    # For actions below: delete the card message (best-effort)
+    # -------------------------
+    if action in {"proc", "pages"}:
+        try:
+            if query.message:
+                await query.message.delete()
+        except Exception:
+            pass
+
+    # -------------------------
+    # Pages prompt
+    # -------------------------
+    if action == "pages":
+        if not input_original.exists():
+            await query.bot.send_message(chat_id, "Исходный файл не найден. Отправьте PDF заново.")
+            return
+
+        _PENDING_PAGES_INPUT.pop(user_id, None)
+
         meta["status"] = "awaiting_pages_input"
         meta["updated_at"] = int(time.time())
         storage.write_meta(user_id, request_id, meta)
 
-        await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
+        msg = await query.bot.send_message(
+            chat_id=chat_id,
             text=(
                 "Введите страницы для удаления в формате:\n"
                 "1, 2, 4-6\n\n"
-                "Будут удалены: 1 2 4 5 6\n\n"
+                "Будут удалены: 1, 2, 4, 5, 6\n\n"
                 "Отправьте 0 — чтобы очистить список удаления."
             ),
         )
+        _PENDING_PAGES_INPUT[user_id] = {
+            "request_id": request_id,
+            "chat_id": chat_id,
+            "prompt_message_id": msg.message_id,
+        }
         return
 
+    # -------------------------
+    # Processing
+    # -------------------------
     if action != "proc":
         return
 
     if not input_original.exists():
-        await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
-            text="Файл не найден на сервере. Отправьте PDF заново.",
-        )
+        await query.bot.send_message(chat_id, "Файл не найден на сервере. Отправьте PDF заново.")
         return
 
-    # источник для обработки: trimmed если есть, иначе original
-    source_pdf = input_trimmed if input_trimmed.exists() else input_original
-
-    # квота: если уже переполнено — отказываем
     if storage.would_exceed_quota(0):
         await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
-            text="Хранилище на сервере заполнено (лимит 30 ГБ). Удалите старые файлы через веб-интерфейс и попробуйте снова.",
+            chat_id,
+            "Хранилище на сервере заполнено (лимит 30 ГБ). Удалите старые файлы через веб-интерфейс и попробуйте снова.",
         )
         return
 
-    status = str(meta.get("status") or "")
-    if status == "processing":
-        await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
-            text="Файл уже обрабатывается. Подождите немного.",
-        )
+    if str(meta.get("status") or "") == "processing":
+        await query.bot.send_message(chat_id, "Файл уже обрабатывается. Подождите немного.")
         return
 
+    # source for processing: trimmed if exists, else original
+    source_pdf = input_trimmed if input_trimmed.exists() else input_original
+
+    processing_msg: Optional[Message] = None
     try:
+        processing_msg = await query.bot.send_message(chat_id, "⏳ Обрабатывается...")
+
         async with process_lock:
             meta = storage.read_meta(user_id, request_id) or meta
             meta["status"] = "processing"
             meta["updated_at"] = int(time.time())
             storage.write_meta(user_id, request_id, meta)
 
-            # обработка (source_pdf не мутируем)
             await asyncio.to_thread(
                 processor.process_pdf,
                 pdf_path=source_pdf,
                 output_path=cleaned,
             )
-
-            # shrink
             await asyncio.to_thread(shrink_pdf, cleaned, cleaned_small)
 
-            # квота после результата: rollback только текущего запроса
             if storage.would_exceed_quota(0):
                 shutil.rmtree(rd, ignore_errors=True)
+                if processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except Exception:
+                        pass
                 await query.bot.send_message(
-                    chat_id=query.message.chat.id if query.message else user_id,
-                    text="После обработки хранилище превысило лимит 30 ГБ. Результат не сохранён. Удалите старые файлы в вебке и повторите.",
+                    chat_id,
+                    "После обработки хранилище превысило лимит 30 ГБ. Результат не сохранён. Удалите старые файлы в вебке и повторите.",
                 )
                 return
 
@@ -617,61 +771,40 @@ async def handle_callback(
         meta["updated_at"] = int(time.time())
         meta.setdefault("errors", []).append({"stage": "processing", "error": str(e)})
         storage.write_meta(user_id, request_id, meta)
-        await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
-            text="Произошла ошибка при обработке PDF. Проверьте лог сервера.",
-        )
+
+        if processing_msg:
+            try:
+                await processing_msg.delete()
+            except Exception:
+                pass
+
+        await query.bot.send_message(chat_id, "Произошла ошибка при обработке PDF. Проверьте лог сервера.")
+        # после ошибки всё равно покажем карточку
+        await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_for_request(request_id))
         return
 
-    # отправка результата в Telegram, с дроблением если > лимита
-    if not cleaned_small.exists():
-        await query.bot.send_message(
-            chat_id=query.message.chat.id if query.message else user_id,
-            text="Результирующий файл не найден. Проверьте лог сервера.",
-        )
-        return
-
-    result_size = cleaned_small.stat().st_size
-    adapter.info("Result size=%s bytes", result_size)
-
-    chat_id = query.message.chat.id if query.message else user_id
-    stem = Path(original_filename).stem
-
-    if result_size <= telegram_max_file_size:
-        await query.bot.send_document(
+    # send result (or split)
+    if cleaned_small.exists():
+        await _send_pdf_to_chat(
+            bot=query.bot,
             chat_id=chat_id,
-            document=FSInputFile(path=str(cleaned_small), filename=original_filename),
+            path=cleaned_small,
+            filename=original_filename,
             caption="Готово! Вот ваш обработанный PDF.",
-        )
-        return
-
-    tmp_dir = Path("/tmp") / f"pdf_send_parts_{request_id}"
-    try:
-        parts_paths = _split_pdf_to_parts_under_limit(
-            cleaned_small,
-            max_bytes=telegram_max_file_size,
-            tmp_root=tmp_dir,
-            base_filename_stem=f"{stem}_cleaned",
+            telegram_max_file_size=telegram_max_file_size,
+            request_id=request_id,
             logger=adapter,
         )
-    except Exception as e:
-        adapter.exception("Split failed: %s", e)
-        await query.bot.send_message(
-            chat_id=chat_id,
-            text=(
-                "Обработанный PDF получился больше лимита Telegram и не удалось корректно его раздробить.\n\n"
-                "Файл сохранён на сервере — скачайте его через веб-интерфейс."
-            ),
-        )
-        return
+    else:
+        await query.bot.send_message(chat_id, "Результирующий файл не найден. Проверьте лог сервера.")
 
-    total_parts = len(parts_paths)
-    for idx, p in enumerate(parts_paths, start=1):
-        cap = f"Готово! Часть {idx}/{total_parts}." if idx == 1 else f"Часть {idx}/{total_parts}."
-        await query.bot.send_document(
-            chat_id=chat_id,
-            document=FSInputFile(path=str(p), filename=p.name),
-            caption=cap,
-        )
+    # delete "processing" message after sending
+    if processing_msg:
+        try:
+            await processing_msg.delete()
+        except Exception:
+            pass
 
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    # show updated card
+    meta = storage.read_meta(user_id, request_id) or meta
+    await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_for_request(request_id))

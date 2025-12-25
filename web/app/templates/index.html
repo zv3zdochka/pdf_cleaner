@@ -82,28 +82,22 @@
                         {% if it.files.input.exists %}
                         <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
                            href="/download/{{ it.user_id }}/{{ it.request_id }}/input">
-                            Скачать input
+                            Скачать входной
                         </a>
                         {% endif %}
 
                         {% if it.files.trimmed.exists %}
                         <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
                            href="/download/{{ it.user_id }}/{{ it.request_id }}/trimmed">
-                            Скачать trimmed
+                            Скачать обрезанный
                         </a>
                         {% endif %}
 
-                        {% if it.files.cleaned.exists %}
-                        <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
-                           href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned">
-                            Скачать cleaned
-                        </a>
-                        {% endif %}
 
                         {% if it.files.cleaned_small.exists %}
                         <a class="px-3 py-2 rounded-xl bg-slate-900 text-white shadow-sm hover:bg-slate-800 text-sm rounded-xl"
                            href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned_small">
-                            Скачать cleaned_small
+                            Скачать отчищенный
                         </a>
                         {% endif %}
 
