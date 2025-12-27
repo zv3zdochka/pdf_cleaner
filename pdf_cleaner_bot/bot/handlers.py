@@ -66,6 +66,21 @@ def _kb_for_request(request_id: str) -> InlineKeyboardMarkup:
     )
 
 
+def _kb_downloads_only(request_id: str) -> InlineKeyboardMarkup:
+    """
+    Row: downloads only (3 buttons)
+    """
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬇️ Исходный", callback_data=f"pdfc:dl:{request_id}:orig"),
+                InlineKeyboardButton(text="⬇️ Обрезанный", callback_data=f"pdfc:dl:{request_id}:trim"),
+                InlineKeyboardButton(text="⬇️ Обработанный", callback_data=f"pdfc:dl:{request_id}:proc"),
+            ],
+        ]
+    )
+
+
 def _parse_pages_spec(spec: str, max_page: int) -> List[int]:
     """
     "1, 2, 4-6" -> [1,2,4,5,6] (1-based)
@@ -125,9 +140,9 @@ def _pdf_page_count(pdf_path: Path) -> int:
 
 
 def _remove_pages_copy(
-    src_pdf: Path,
-    dst_pdf: Path,
-    pages_to_delete_1based: List[int],
+        src_pdf: Path,
+        dst_pdf: Path,
+        pages_to_delete_1based: List[int],
 ) -> Tuple[int, int]:
     """
     Создаёт копию dst_pdf из src_pdf, удаляя указанные страницы (1-based).
@@ -168,12 +183,12 @@ def _remove_pages_copy(
 
 
 def _split_pdf_to_parts_under_limit(
-    pdf_path: Path,
-    *,
-    max_bytes: int,
-    tmp_root: Path,
-    base_filename_stem: str,
-    logger: logging.LoggerAdapter,
+        pdf_path: Path,
+        *,
+        max_bytes: int,
+        tmp_root: Path,
+        base_filename_stem: str,
+        logger: logging.LoggerAdapter,
 ) -> List[Path]:
     tmp_root.mkdir(parents=True, exist_ok=True)
     src = fitz.open(pdf_path)
@@ -282,15 +297,15 @@ def _build_card_text(meta: Dict[str, Any]) -> str:
 
 
 async def _send_pdf_to_chat(
-    *,
-    bot: Bot,
-    chat_id: int,
-    path: Path,
-    filename: str,
-    caption: Optional[str],
-    telegram_max_file_size: int,
-    request_id: str,
-    logger: logging.LoggerAdapter,
+        *,
+        bot: Bot,
+        chat_id: int,
+        path: Path,
+        filename: str,
+        caption: Optional[str],
+        telegram_max_file_size: int,
+        request_id: str,
+        logger: logging.LoggerAdapter,
 ) -> None:
     if not path.exists():
         await bot.send_message(chat_id, "Файл не найден на сервере.")
@@ -350,12 +365,12 @@ async def cmd_start(message: Message) -> None:
 
 
 async def handle_document(
-    message: Message,
-    bot: Bot,
-    *,
-    telegram_max_file_size: int,
-    internal_max_file_size: int,
-    storage: StorageManager,
+        message: Message,
+        bot: Bot,
+        *,
+        telegram_max_file_size: int,
+        internal_max_file_size: int,
+        storage: StorageManager,
 ) -> None:
     document = message.document
     if not document:
@@ -453,9 +468,9 @@ async def handle_document(
 
 
 async def handle_pages_text(
-    message: Message,
-    *,
-    storage: StorageManager,
+        message: Message,
+        *,
+        storage: StorageManager,
 ) -> None:
     user_id = message.from_user.id if message.from_user else 0
     pending = _PENDING_PAGES_INPUT.get(user_id)
@@ -562,14 +577,14 @@ async def handle_pages_text(
 
 
 async def handle_callback(
-    query: CallbackQuery,
-    *,
-    processor,
-    shrink_pdf,
-    process_lock: asyncio.Lock,
-    telegram_max_file_size: int,
-    internal_max_file_size: int,  # оставлено для совместимости
-    storage: StorageManager,
+        query: CallbackQuery,
+        *,
+        processor,
+        shrink_pdf,
+        process_lock: asyncio.Lock,
+        telegram_max_file_size: int,
+        internal_max_file_size: int,  # оставлено для совместимости
+        storage: StorageManager,
 ) -> None:
     await query.answer()
 
@@ -805,6 +820,11 @@ async def handle_callback(
         except Exception:
             pass
 
-    # show updated card
+    # show updated card (downloads only after done)
     meta = storage.read_meta(user_id, request_id) or meta
-    await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_for_request(request_id))
+    if str(meta.get("status") or "") == "done":
+        kb = _kb_downloads_only(request_id)
+    else:
+        kb = _kb_for_request(request_id)
+
+    await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=kb)
