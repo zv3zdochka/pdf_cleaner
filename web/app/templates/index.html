@@ -25,94 +25,96 @@
         </form>
     </div>
 
-    <div class="mt-6 bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div class="p-4 border-b border-slate-200 flex items-center justify-between">
-            <div class="text-sm text-slate-600">
-                Найдено: <span class="font-medium text-slate-900">{{ items|length }}</span>
-            </div>
-
-        </div>
-
-        {% if items|length == 0 %}
-        <div class="p-10 text-center text-slate-600">
-            Пока нет сохранённых файлов.
-        </div>
-        {% else %}
-        <div class="divide-y divide-slate-100">
-            {% for it in items %}
-            <div class="p-4 hover:bg-slate-50">
-                <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div class="min-w-0">
-                        <div class="flex flex-wrap items-center gap-2">
-                            <div class="font-semibold truncate" title="{{ it.original_filename }}">
-                                {{ it.original_filename|truncate(25, True, '…') }}
-                            </div>
-                            <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
-                  user_id: {{ it.user_id }}
-                </span>
-                            <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
-                  request_id: {{ it.request_id }}
-                </span>
-                            <span class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-                  {{ it.status }}
-                </span>
-                        </div>
-
-                        <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm text-slate-600">
-                            <div>
-                                <div class="text-xs uppercase text-slate-400">created</div>
-                                <div class="font-medium text-slate-700">{{ it.created_at_h }}</div>
-                            </div>
-                            <div>
-                                <div class="text-xs uppercase text-slate-400">mtime</div>
-                                <div class="font-medium text-slate-700">{{ it.mtime_h }}</div>
-                            </div>
-                            <div>
-                                <div class="text-xs uppercase text-slate-400">input</div>
-                                <div class="font-medium text-slate-700">{{ it.files.input.size_h }}</div>
-                            </div>
-                            <div>
-                                <div class="text-xs uppercase text-slate-400">output</div>
-                                <div class="font-medium text-slate-700">{{ it.files.cleaned_small.size_h }}</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="flex flex-wrap gap-2 lg:justify-end">
-                        {% if it.files.input.exists %}
-                        <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
-                           href="/download/{{ it.user_id }}/{{ it.request_id }}/input">
-                            Скачать входной
-                        </a>
-                        {% endif %}
-
-                        {% if it.files.trimmed.exists %}
-                        <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
-                           href="/download/{{ it.user_id }}/{{ it.request_id }}/trimmed">
-                            Скачать обрезанный
-                        </a>
-                        {% endif %}
-
-
-                        {% if it.files.cleaned_small.exists %}
-                        <a class="px-3 py-2 rounded-xl bg-slate-900 text-white shadow-sm hover:bg-slate-800 text-sm rounded-xl"
-                           href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned_small">
-                            Скачать отчищенный
-                        </a>
-                        {% endif %}
-
-                        <button class="px-3 py-2 rounded-xl bg-rose-600 text-white shadow-sm hover:bg-rose-500 text-sm"
-                                onclick="delReq('{{ it.user_id }}','{{ it.request_id }}')">
-                            Удалить
-                        </button>
+    <!-- ВАЖНО: этот wrapper расширяет "подложку" относительно заголовка (симметрично влево/вправо) -->
+    <div class="mt-6 -mx-6">
+        <div class="max-w-[90rem] mx-auto px-6">
+            <div class="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+                <div class="p-4 border-b border-slate-200 flex items-center justify-between">
+                    <div class="text-sm text-slate-600">
+                        Найдено: <span class="font-medium text-slate-900">{{ items|length }}</span>
                     </div>
                 </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
-    </div>
 
+                {% if items|length == 0 %}
+                <div class="p-10 text-center text-slate-600">
+                    Пока нет сохранённых файлов.
+                </div>
+                {% else %}
+                <div class="divide-y divide-slate-100">
+                    {% for it in items %}
+                    <div class="p-4 hover:bg-slate-50">
+                        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div class="min-w-0">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <div class="font-semibold truncate" title="{{ it.original_filename }}">
+                                        {{ it.original_filename|truncate(25, True, '…') }}
+                                    </div>
+                                    <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                          user_id: {{ it.user_id }}
+                        </span>
+                                    <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-700">
+                          request_id: {{ it.request_id }}
+                        </span>
+                                    <span class="text-xs px-2 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                          {{ it.status }}
+                        </span>
+                                </div>
+
+                                <div class="mt-2 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-sm text-slate-600">
+                                    <div>
+                                        <div class="text-xs uppercase text-slate-400">created</div>
+                                        <div class="font-medium text-slate-700">{{ it.created_at_h }}</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-xs uppercase text-slate-400">mtime</div>
+                                        <div class="font-medium text-slate-700">{{ it.mtime_h }}</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-xs uppercase text-slate-400">input</div>
+                                        <div class="font-medium text-slate-700">{{ it.files.input.size_h }}</div>
+                                    </div>
+                                    <div>
+                                        <div class="text-xs uppercase text-slate-400">output</div>
+                                        <div class="font-medium text-slate-700">{{ it.files.cleaned_small.size_h }}</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="flex flex-wrap gap-2 lg:justify-end">
+                                {% if it.files.input.exists %}
+                                <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                                   href="/download/{{ it.user_id }}/{{ it.request_id }}/input">
+                                    Исходный PDF
+                                </a>
+                                {% endif %}
+
+                                {% if it.files.trimmed.exists %}
+                                <a class="px-3 py-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:bg-slate-50 text-sm"
+                                   href="/download/{{ it.user_id }}/{{ it.request_id }}/trimmed">
+                                    PDF без страниц
+                                </a>
+                                {% endif %}
+
+                                {% if it.files.cleaned_small.exists %}
+                                <a class="px-3 py-2 rounded-xl bg-slate-900 text-white shadow-sm hover:bg-slate-800 text-sm rounded-xl"
+                                   href="/download/{{ it.user_id }}/{{ it.request_id }}/cleaned_small">
+                                    Готовый PDF
+                                </a>
+                                {% endif %}
+
+                                <button class="px-3 py-2 rounded-xl bg-rose-600 text-white shadow-sm hover:bg-rose-500 text-sm"
+                                        onclick="delReq('{{ it.user_id }}','{{ it.request_id }}')">
+                                    Удалить
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
 </div>
 
 <script>

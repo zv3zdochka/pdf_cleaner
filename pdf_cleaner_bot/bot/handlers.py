@@ -46,10 +46,9 @@ def _human_bytes(n: int) -> str:
     return f"{v:.2f} {units[i]}"
 
 
-def _kb_for_request(request_id: str) -> InlineKeyboardMarkup:
+def _kb_actions(request_id: str) -> InlineKeyboardMarkup:
     """
-    Row1: actions
-    Row2: downloads (3 buttons)
+    Только управляющие кнопки (первое сообщение после загрузки).
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -57,18 +56,13 @@ def _kb_for_request(request_id: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="✅ Обработать", callback_data=f"pdfc:proc:{request_id}"),
                 InlineKeyboardButton(text="🗑 Страницы", callback_data=f"pdfc:pages:{request_id}"),
             ],
-            [
-                InlineKeyboardButton(text="⬇️ Исходный", callback_data=f"pdfc:dl:{request_id}:orig"),
-                InlineKeyboardButton(text="⬇️ Обрезанный", callback_data=f"pdfc:dl:{request_id}:trim"),
-                InlineKeyboardButton(text="⬇️ Обработанный", callback_data=f"pdfc:dl:{request_id}:proc"),
-            ],
         ]
     )
 
 
-def _kb_downloads_only(request_id: str) -> InlineKeyboardMarkup:
+def _kb_downloads(request_id: str) -> InlineKeyboardMarkup:
     """
-    Row: downloads only (3 buttons)
+    Только скачивания (сообщение после того, как бот прислал результат).
     """
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -464,7 +458,8 @@ async def handle_document(
     meta["input"]["original"]["size_bytes"] = input_original.stat().st_size if input_original.exists() else 0
     storage.write_meta(user_id, request_id, meta)
 
-    await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
+    # ВАЖНО: первое сообщение — только (Обработать, Страницы)
+    await message.reply(_build_card_text(meta), reply_markup=_kb_actions(request_id))
 
 
 async def handle_pages_text(
@@ -535,7 +530,8 @@ async def handle_pages_text(
         storage.write_meta(user_id, request_id, meta)
 
         _PENDING_PAGES_INPUT.pop(user_id, None)
-        await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
+        # ДО обработки — только (Обработать, Страницы)
+        await message.reply(_build_card_text(meta), reply_markup=_kb_actions(request_id))
         return
 
     # Conservative quota check: trimmed copy can be near original size
@@ -573,7 +569,8 @@ async def handle_pages_text(
     storage.write_meta(user_id, request_id, meta)
 
     _PENDING_PAGES_INPUT.pop(user_id, None)
-    await message.reply(_build_card_text(meta), reply_markup=_kb_for_request(request_id))
+    # ДО обработки — только (Обработать, Страницы)
+    await message.reply(_build_card_text(meta), reply_markup=_kb_actions(request_id))
 
 
 async def handle_callback(
@@ -794,8 +791,8 @@ async def handle_callback(
                 pass
 
         await query.bot.send_message(chat_id, "Произошла ошибка при обработке PDF. Проверьте лог сервера.")
-        # после ошибки всё равно покажем карточку
-        await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_for_request(request_id))
+        # после ошибки: файл не прислан -> оставляем только (Обработать, Страницы)
+        await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_actions(request_id))
         return
 
     # send result (or split)
@@ -820,11 +817,6 @@ async def handle_callback(
         except Exception:
             pass
 
-    # show updated card (downloads only after done)
+    # show updated card AFTER result: только кнопки скачивания
     meta = storage.read_meta(user_id, request_id) or meta
-    if str(meta.get("status") or "") == "done":
-        kb = _kb_downloads_only(request_id)
-    else:
-        kb = _kb_for_request(request_id)
-
-    await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=kb)
+    await query.bot.send_message(chat_id, _build_card_text(meta), reply_markup=_kb_downloads(request_id))
