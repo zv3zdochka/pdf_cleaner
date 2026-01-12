@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sqlite3
@@ -12,6 +13,10 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+
+# Setup logging for web app
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("pdf_cleaner.web")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -164,13 +169,26 @@ def scan_requests(storage_dir: Path) -> List[Dict[str, Any]]:
 def get_users_from_db(storage_dir: Path) -> List[Dict[str, Any]]:
     """Read users from the SQLite database."""
     db_path = storage_dir / "users.db"
+
+    logger.info("Looking for users database at: %s", db_path)
+
     if not db_path.exists():
+        logger.warning("Users database does not exist: %s", db_path)
         return []
+
+    logger.info("Users database found, size: %d bytes", db_path.stat().st_size)
 
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if not cursor.fetchone():
+            logger.warning("Users table does not exist in database")
+            conn.close()
+            return []
 
         cursor.execute('''
                        SELECT user_id,
@@ -206,22 +224,33 @@ def get_users_from_db(storage_dir: Path) -> List[Dict[str, Any]]:
             users.append(user)
 
         conn.close()
+
+        logger.info("Found %d users in database", len(users))
         return users
 
-    except Exception:
+    except Exception as e:
+        logger.error("Error reading users database: %s", e, exc_info=True)
         return []
 
 
 def get_user_stats_from_db(storage_dir: Path) -> Dict[str, Any]:
     """Get aggregate user statistics from the database."""
     db_path = storage_dir / "users.db"
+    default_stats = {"total_users": 0, "total_pdfs": 0, "total_messages": 0, "total_chats": 0}
+
     if not db_path.exists():
-        return {"total_users": 0, "total_pdfs": 0, "total_messages": 0, "total_chats": 0}
+        return default_stats
 
     try:
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+
+        # Check if table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
+        if not cursor.fetchone():
+            conn.close()
+            return default_stats
 
         cursor.execute("SELECT COUNT(*) as total_users FROM users")
         total_users = cursor.fetchone()["total_users"]
@@ -246,8 +275,9 @@ def get_user_stats_from_db(storage_dir: Path) -> Dict[str, Any]:
             "total_chats": total_chats,
         }
 
-    except Exception:
-        return {"total_users": 0, "total_pdfs": 0, "total_messages": 0, "total_chats": 0}
+    except Exception as e:
+        logger.error("Error getting user stats: %s", e)
+        return default_stats
 
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -324,6 +354,10 @@ async def users_page(request: Request, q: str = ""):
     cfg = _cfg()
     cfg.storage_dir.mkdir(parents=True, exist_ok=True)
 
+    # Debug: log database path
+    db_path = cfg.storage_dir / "users.db"
+    logger.info("Users page requested. DB path: %s, exists: %s", db_path, db_path.exists())
+
     users = get_users_from_db(cfg.storage_dir)
     stats = get_user_stats_from_db(cfg.storage_dir)
 
@@ -344,6 +378,8 @@ async def users_page(request: Request, q: str = ""):
             "users": users,
             "stats": stats,
             "q": q,
+            "db_path": str(db_path),
+            "db_exists": db_path.exists(),
         },
     )
 
@@ -375,6 +411,36 @@ async def api_users_stats():
     cfg = _cfg()
     cfg.storage_dir.mkdir(parents=True, exist_ok=True)
     return get_user_stats_from_db(cfg.storage_dir)
+
+
+@app.get("/api/debug/db")
+async def api_debug_db():
+    """Debug endpoint to check database status."""
+    cfg = _cfg()
+    db_path = cfg.storage_dir / "users.db"
+
+    result = {
+        "storage_dir": str(cfg.storage_dir),
+        "db_path": str(db_path),
+        "db_exists": db_path.exists(),
+        "db_size": db_path.stat().st_size if db_path.exists() else 0,
+    }
+
+    if db_path.exists():
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            result["tables"] = [row[0] for row in cursor.fetchall()]
+
+            cursor.execute("SELECT COUNT(*) FROM users")
+            result["user_count"] = cursor.fetchone()[0]
+
+            conn.close()
+        except Exception as e:
+            result["error"] = str(e)
+
+    return result
 
 
 @app.get("/api/requests")

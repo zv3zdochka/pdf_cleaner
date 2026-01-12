@@ -13,7 +13,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message, CallbackQuery, Update, TelegramObject
+from aiogram.types import Message, CallbackQuery, TelegramObject
 
 from pdf_cleaner_bot.storage.user_db import UserDatabase
 
@@ -34,6 +34,7 @@ class UserTrackingMiddleware(BaseMiddleware):
         super().__init__()
         self.user_db = user_db
         self.log = logger or logging.getLogger(__name__)
+        self.log.info("UserTrackingMiddleware initialized")
 
     async def __call__(
         self,
@@ -55,10 +56,12 @@ class UserTrackingMiddleware(BaseMiddleware):
             # Check if this is a PDF document
             if event.document and event.document.mime_type == "application/pdf":
                 is_pdf = True
+                self.log.info("Detected PDF upload from user %s", user.id if user else "unknown")
 
             # Check if user shared contact with phone number
-            if event.contact and event.contact.user_id == (user.id if user else None):
+            if event.contact and user and event.contact.user_id == user.id:
                 phone_number = event.contact.phone_number
+                self.log.info("User %s shared phone number", user.id)
 
         elif isinstance(event, CallbackQuery):
             user = event.from_user
@@ -67,6 +70,11 @@ class UserTrackingMiddleware(BaseMiddleware):
 
         # Record user activity if we have user info
         if user is not None:
+            self.log.info(
+                "Tracking user: id=%s, username=%s, first_name=%s, chat_id=%s",
+                user.id, user.username, user.first_name,
+                chat.id if chat else None
+            )
             try:
                 self.user_db.record_user_activity(
                     user_id=user.id,
@@ -80,8 +88,11 @@ class UserTrackingMiddleware(BaseMiddleware):
                     is_pdf=is_pdf,
                     phone_number=phone_number,
                 )
+                self.log.info("Successfully tracked user %s", user.id)
             except Exception as e:
-                self.log.warning("Failed to track user %s: %s", user.id, e)
+                self.log.error("Failed to track user %s: %s", user.id, e, exc_info=True)
+        else:
+            self.log.debug("No user info in event: %s", type(event).__name__)
 
         # Continue to the actual handler
         return await handler(event, data)

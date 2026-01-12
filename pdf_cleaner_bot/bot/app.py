@@ -33,15 +33,21 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
 
     # Initialize user database
     user_db_path = settings.storage_dir / "users.db"
+    user_db_logger = logging.getLogger("pdf_cleaner.user_db")
+    user_db_logger.info("Initializing user database at: %s", user_db_path)
+
     user_db = UserDatabase(
         db_path=user_db_path,
-        logger=logging.getLogger("pdf_cleaner.user_db"),
+        logger=user_db_logger,
     )
 
     # Register user tracking middleware
+    user_tracker_logger = logging.getLogger("pdf_cleaner.user_tracker")
+    user_tracker_logger.info("Registering user tracking middleware")
+
     user_tracker = UserTrackingMiddleware(
         user_db=user_db,
-        logger=logging.getLogger("pdf_cleaner.user_tracker"),
+        logger=user_tracker_logger,
     )
     dp.message.middleware(user_tracker)
     dp.callback_query.middleware(user_tracker)
@@ -82,6 +88,7 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
             storage=storage,
         )
 
+    # Только обычный текст (не команды)
     dp.message.register(_pages_text_handler, F.text & ~F.text.startswith("/"))
 
     return dp

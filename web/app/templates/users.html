@@ -16,6 +16,9 @@
                 PDF отправлено: <span class="font-medium">{{ stats.total_pdfs }}</span> |
                 Сообщений: <span class="font-medium">{{ stats.total_messages }}</span>
             </p>
+            <p class="text-xs text-slate-400 mt-1">
+                DB: {{ db_path }} | Exists: {{ db_exists }}
+            </p>
         </div>
         <div class="flex gap-2">
             <a href="/" class="rounded-xl px-4 py-2 bg-slate-200 text-slate-800 shadow-sm hover:bg-slate-300">
@@ -42,79 +45,85 @@
 
                 {% if users|length == 0 %}
                 <div class="p-10 text-center text-slate-600">
-                    Пока нет данных о пользователях.
+                    <p>Пока нет данных о пользователях.</p>
+                    {% if not db_exists %}
+                    <p class="mt-2 text-sm text-amber-600">
+                        ⚠️ База данных пользователей не найдена. Убедитесь, что бот был пересобран с новым кодом:
+                        <code class="bg-slate-100 px-2 py-1 rounded">docker compose up -d --build bot</code>
+                    </p>
+                    {% endif %}
                 </div>
                 {% else %}
                 <div class="overflow-x-auto">
                     <table class="w-full text-sm">
                         <thead class="bg-slate-50 border-b border-slate-200">
-                        <tr>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">User ID</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Username</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Имя</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Язык</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Телефон</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Первый визит</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Последняя активность</th>
-                            <th class="px-4 py-3 text-right font-medium text-slate-600">PDF</th>
-                            <th class="px-4 py-3 text-right font-medium text-slate-600">Сообщений</th>
-                            <th class="px-4 py-3 text-left font-medium text-slate-600">Чаты</th>
-                        </tr>
+                            <tr>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">User ID</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Username</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Имя</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Язык</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Телефон</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Первый визит</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Последняя активность</th>
+                                <th class="px-4 py-3 text-right font-medium text-slate-600">PDF</th>
+                                <th class="px-4 py-3 text-right font-medium text-slate-600">Сообщений</th>
+                                <th class="px-4 py-3 text-left font-medium text-slate-600">Чаты</th>
+                            </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-100">
-                        {% for user in users %}
-                        <tr class="hover:bg-slate-50">
-                            <td class="px-4 py-3 font-mono text-slate-700">{{ user.user_id }}</td>
-                            <td class="px-4 py-3">
-                                {% if user.username %}
-                                <a href="https://t.me/{{ user.username }}" target="_blank"
-                                   class="text-blue-600 hover:underline">@{{ user.username }}</a>
-                                {% else %}
-                                <span class="text-slate-400">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3">
-                                <div class="flex items-center gap-1">
-                                    <span>{{ user.first_name or '' }} {{ user.last_name or '' }}</span>
-                                    {% if user.is_bot %}
-                                    <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">bot</span>
+                            {% for user in users %}
+                            <tr class="hover:bg-slate-50">
+                                <td class="px-4 py-3 font-mono text-slate-700">{{ user.user_id }}</td>
+                                <td class="px-4 py-3">
+                                    {% if user.username %}
+                                    <a href="https://t.me/{{ user.username }}" target="_blank"
+                                       class="text-blue-600 hover:underline">@{{ user.username }}</a>
+                                    {% else %}
+                                    <span class="text-slate-400">—</span>
                                     {% endif %}
-                                </div>
-                            </td>
-                            <td class="px-4 py-3">
-                                {% if user.language_code %}
-                                <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">{{ user.language_code }}</span>
-                                {% else %}
-                                <span class="text-slate-400">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 font-mono text-xs">
-                                {% if user.phone_number %}
-                                {{ user.phone_number }}
-                                {% else %}
-                                <span class="text-slate-400">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-slate-600 text-xs">{{ user.first_seen_at_h }}</td>
-                            <td class="px-4 py-3 text-slate-600 text-xs">{{ user.last_activity_at_h }}</td>
-                            <td class="px-4 py-3 text-right">
-                                <span class="font-medium text-emerald-700">{{ user.pdfs_sent }}</span>
-                            </td>
-                            <td class="px-4 py-3 text-right text-slate-600">{{ user.messages_count }}</td>
-                            <td class="px-4 py-3">
-                                {% if user.chats %}
-                                <div class="flex flex-wrap gap-1">
-                                    {% for chat in user.chats %}
-                                    <span class="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700"
-                                          title="Chat ID: {{ chat.chat_id }}">{{ chat.chat_type }}</span>
-                                    {% endfor %}
-                                </div>
-                                {% else %}
-                                <span class="text-slate-400">—</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
+                                </td>
+                                <td class="px-4 py-3">
+                                    <div class="flex items-center gap-1">
+                                        <span>{{ user.first_name or '' }} {{ user.last_name or '' }}</span>
+                                        {% if user.is_bot %}
+                                        <span class="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">bot</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td class="px-4 py-3">
+                                    {% if user.language_code %}
+                                    <span class="text-xs px-2 py-1 rounded-full bg-slate-100 text-slate-600">{{ user.language_code }}</span>
+                                    {% else %}
+                                    <span class="text-slate-400">—</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 font-mono text-xs">
+                                    {% if user.phone_number %}
+                                    {{ user.phone_number }}
+                                    {% else %}
+                                    <span class="text-slate-400">—</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-slate-600 text-xs">{{ user.first_seen_at_h }}</td>
+                                <td class="px-4 py-3 text-slate-600 text-xs">{{ user.last_activity_at_h }}</td>
+                                <td class="px-4 py-3 text-right">
+                                    <span class="font-medium text-emerald-700">{{ user.pdfs_sent }}</span>
+                                </td>
+                                <td class="px-4 py-3 text-right text-slate-600">{{ user.messages_count }}</td>
+                                <td class="px-4 py-3">
+                                    {% if user.chats %}
+                                    <div class="flex flex-wrap gap-1">
+                                        {% for chat in user.chats %}
+                                        <span class="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700"
+                                              title="Chat ID: {{ chat.chat_id }}">{{ chat.chat_type }}</span>
+                                        {% endfor %}
+                                    </div>
+                                    {% else %}
+                                    <span class="text-slate-400">—</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
                         </tbody>
                     </table>
                 </div>
