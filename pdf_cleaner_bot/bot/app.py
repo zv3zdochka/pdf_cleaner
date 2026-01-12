@@ -13,6 +13,8 @@ from pdf_cleaner_bot.bot.handlers import (
     handle_pages_text,
 )
 from pdf_cleaner_bot.storage.manager import StorageConfig, StorageManager
+from pdf_cleaner_bot.storage.user_db import UserDatabase
+from pdf_cleaner_bot.bot.user_tracker import UserTrackingMiddleware
 
 
 def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
@@ -28,6 +30,21 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
         ),
         logger=logging.getLogger("pdf_cleaner.storage"),
     )
+
+    # Initialize user database
+    user_db_path = settings.storage_dir / "users.db"
+    user_db = UserDatabase(
+        db_path=user_db_path,
+        logger=logging.getLogger("pdf_cleaner.user_db"),
+    )
+
+    # Register user tracking middleware
+    user_tracker = UserTrackingMiddleware(
+        user_db=user_db,
+        logger=logging.getLogger("pdf_cleaner.user_tracker"),
+    )
+    dp.message.middleware(user_tracker)
+    dp.callback_query.middleware(user_tracker)
 
     # /start
     dp.message.register(cmd_start, CommandStart())
@@ -65,7 +82,6 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
             storage=storage,
         )
 
-    # Только обычный текст (не команды)
     dp.message.register(_pages_text_handler, F.text & ~F.text.startswith("/"))
 
     return dp
