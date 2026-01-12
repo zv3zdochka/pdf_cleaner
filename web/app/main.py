@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -72,6 +74,17 @@ def _human_bytes(n: int) -> str:
     if i == 0:
         return f"{int(v)} {units[i]}"
     return f"{v:.2f} {units[i]}"
+
+
+def _format_iso_datetime(iso_str: Optional[str]) -> str:
+    """Convert ISO datetime string to human-readable format."""
+    if not iso_str:
+        return "—"
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return iso_str
 
 
 def scan_requests(storage_dir: Path) -> List[Dict[str, Any]]:
@@ -148,6 +161,95 @@ def scan_requests(storage_dir: Path) -> List[Dict[str, Any]]:
     return out
 
 
+def get_users_from_db(storage_dir: Path) -> List[Dict[str, Any]]:
+    """Read users from the SQLite database."""
+    db_path = storage_dir / "users.db"
+    if not db_path.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute('''
+                       SELECT user_id,
+                              username,
+                              first_name,
+                              last_name,
+                              language_code,
+                              is_bot,
+                              phone_number,
+                              first_seen_at,
+                              last_activity_at,
+                              pdfs_sent,
+                              messages_count
+                       FROM users
+                       ORDER BY last_activity_at DESC
+                       ''')
+
+        users = []
+        for row in cursor.fetchall():
+            user = dict(row)
+            user["is_bot"] = bool(user["is_bot"])
+            user["first_seen_at_h"] = _format_iso_datetime(user.get("first_seen_at"))
+            user["last_activity_at_h"] = _format_iso_datetime(user.get("last_activity_at"))
+
+            # Get associated chats
+            cursor.execute('''
+                           SELECT chat_id, chat_type, first_seen_at, last_seen_at
+                           FROM user_chats
+                           WHERE user_id = ?
+                           ''', (user["user_id"],))
+            user["chats"] = [dict(c) for c in cursor.fetchall()]
+
+            users.append(user)
+
+        conn.close()
+        return users
+
+    except Exception:
+        return []
+
+
+def get_user_stats_from_db(storage_dir: Path) -> Dict[str, Any]:
+    """Get aggregate user statistics from the database."""
+    db_path = storage_dir / "users.db"
+    if not db_path.exists():
+        return {"total_users": 0, "total_pdfs": 0, "total_messages": 0, "total_chats": 0}
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT COUNT(*) as total_users FROM users")
+        total_users = cursor.fetchone()["total_users"]
+
+        cursor.execute("SELECT SUM(pdfs_sent) as total_pdfs FROM users")
+        row = cursor.fetchone()
+        total_pdfs = row["total_pdfs"] if row["total_pdfs"] else 0
+
+        cursor.execute("SELECT SUM(messages_count) as total_messages FROM users")
+        row = cursor.fetchone()
+        total_messages = row["total_messages"] if row["total_messages"] else 0
+
+        cursor.execute("SELECT COUNT(DISTINCT chat_id) as total_chats FROM user_chats")
+        total_chats = cursor.fetchone()["total_chats"]
+
+        conn.close()
+
+        return {
+            "total_users": total_users,
+            "total_pdfs": total_pdfs,
+            "total_messages": total_messages,
+            "total_chats": total_chats,
+        }
+
+    except Exception:
+        return {"total_users": 0, "total_pdfs": 0, "total_messages": 0, "total_chats": 0}
+
+
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 app = FastAPI(title="PDF Cleaner Storage", version="1.0.0")
 
@@ -214,6 +316,65 @@ async def index(request: Request, q: str = ""):
             "limit_h": _human_bytes(cfg.max_bytes),
         },
     )
+
+
+@app.get("/users", response_class=HTMLResponse)
+async def users_page(request: Request, q: str = ""):
+    """Display users page with Telegram user data and statistics."""
+    cfg = _cfg()
+    cfg.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    users = get_users_from_db(cfg.storage_dir)
+    stats = get_user_stats_from_db(cfg.storage_dir)
+
+    if q:
+        ql = q.lower().strip()
+        users = [
+            u for u in users
+            if ql in str(u["user_id"]).lower()
+               or ql in (u["username"] or "").lower()
+               or ql in (u["first_name"] or "").lower()
+               or ql in (u["last_name"] or "").lower()
+        ]
+
+    return templates.TemplateResponse(
+        "users.html",
+        {
+            "request": request,
+            "users": users,
+            "stats": stats,
+            "q": q,
+        },
+    )
+
+
+@app.get("/api/users")
+async def api_users(q: str = ""):
+    """API endpoint to get all users."""
+    cfg = _cfg()
+    cfg.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    users = get_users_from_db(cfg.storage_dir)
+
+    if q:
+        ql = q.lower().strip()
+        users = [
+            u for u in users
+            if ql in str(u["user_id"]).lower()
+               or ql in (u["username"] or "").lower()
+               or ql in (u["first_name"] or "").lower()
+               or ql in (u["last_name"] or "").lower()
+        ]
+
+    return {"users": users}
+
+
+@app.get("/api/users/stats")
+async def api_users_stats():
+    """API endpoint to get user statistics summary."""
+    cfg = _cfg()
+    cfg.storage_dir.mkdir(parents=True, exist_ok=True)
+    return get_user_stats_from_db(cfg.storage_dir)
 
 
 @app.get("/api/requests")
