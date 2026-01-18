@@ -149,6 +149,30 @@ class UserDatabase:
         if self.log:
             self.log.info("User database initialized successfully at %s", self.db_path)
 
+    def has_phone_number(self, user_id: int) -> bool:
+        """Check if user has phone number in database.
+
+        Parameters
+        ----------
+        user_id:
+            Telegram user ID.
+
+        Returns
+        -------
+        bool
+            True if user has phone number, False otherwise.
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("SELECT phone_number FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row["phone_number"]:
+                return True
+            return False
+        finally:
+            conn.close()
+
     def record_user_activity(
         self,
         user_id: int,
