@@ -5,6 +5,7 @@ import logging
 
 from aiogram import Dispatcher, F
 from aiogram.filters import CommandStart
+from aiogram.types import ContentType
 
 from pdf_cleaner_bot.bot.handlers import (
     cmd_start,
@@ -14,7 +15,7 @@ from pdf_cleaner_bot.bot.handlers import (
 )
 from pdf_cleaner_bot.storage.manager import StorageConfig, StorageManager
 from pdf_cleaner_bot.storage.user_db import UserDatabase
-from pdf_cleaner_bot.bot.user_tracker import UserTrackingMiddleware
+from pdf_cleaner_bot.bot.user_tracker import UserTrackingMiddleware, handle_contact
 
 
 def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
@@ -31,7 +32,6 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
         logger=logging.getLogger("pdf_cleaner.storage"),
     )
 
-    # Initialize user database
     user_db_path = settings.storage_dir / "users.db"
     user_db_logger = logging.getLogger("pdf_cleaner.user_db")
     user_db_logger.info("Initializing user database at: %s", user_db_path)
@@ -41,7 +41,6 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
         logger=user_db_logger,
     )
 
-    # Register user tracking middleware
     user_tracker_logger = logging.getLogger("pdf_cleaner.user_tracker")
     user_tracker_logger.info("Registering user tracking middleware")
 
@@ -52,10 +51,16 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
     dp.message.middleware(user_tracker)
     dp.callback_query.middleware(user_tracker)
 
+    # Contact handler - register FIRST with content_type filter
+    async def _contact_handler(message):
+        return await handle_contact(message, user_db)
+
+    dp.message.register(_contact_handler, F.content_type == ContentType.CONTACT)
+
     # /start
     dp.message.register(cmd_start, CommandStart())
 
-    # PDF document -> store + show card with buttons
+    # PDF document
     async def _doc_handler(message):
         return await handle_document(
             message,
@@ -81,14 +86,13 @@ def build_dispatcher(*, processor, shrink_pdf, settings) -> Dispatcher:
 
     dp.callback_query.register(_cb_handler, F.data.startswith("pdfc:"))
 
-    # Text input for pages (only when user is in pending state)
+    # Text input for pages
     async def _pages_text_handler(message):
         return await handle_pages_text(
             message,
             storage=storage,
         )
 
-    # Только обычный текст (не команды)
     dp.message.register(_pages_text_handler, F.text & ~F.text.startswith("/"))
 
     return dp

@@ -1,64 +1,40 @@
-"""User database for storing Telegram user data and statistics.
-
-This module provides a lightweight SQLite-based persistence layer for
-tracking Telegram users who interact with the bot.
-"""
-
 from __future__ import annotations
 
 import sqlite3
 import threading
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 
 class UserDatabase:
-    """SQLite database manager for user data and statistics."""
-
-    # Current schema version
     SCHEMA_VERSION = 2
 
     def __init__(self, db_path: Path, logger=None):
-        """Initialize the user database.
-
-        Parameters
-        ----------
-        db_path:
-            Path to the SQLite database file.
-        logger:
-            Optional logger instance.
-        """
         self.db_path = Path(db_path)
-        self.log = logger
+        self.log = logger or logging.getLogger(__name__)
         self._lock = threading.Lock()
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
-        """Get a new database connection."""
         conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         return conn
 
     def _get_existing_columns(self, conn: sqlite3.Connection, table_name: str) -> Set[str]:
-        """Get set of existing column names for a table."""
         cursor = conn.cursor()
         cursor.execute(f"PRAGMA table_info({table_name})")
         return {row[1] for row in cursor.fetchall()}
 
     def _migrate_schema(self, conn: sqlite3.Connection) -> None:
-        """Migrate database schema to current version."""
         cursor = conn.cursor()
-
-        # Check if users table exists
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")
         if not cursor.fetchone():
-            # No users table yet, nothing to migrate
             return
 
         existing_columns = self._get_existing_columns(conn, "users")
 
-        # List of columns that should exist with their definitions
         required_columns = {
             "user_id": "INTEGER PRIMARY KEY",
             "username": "TEXT",
@@ -73,11 +49,8 @@ class UserDatabase:
             "messages_count": "INTEGER DEFAULT 0",
         }
 
-        # Add missing columns
         for col_name, col_def in required_columns.items():
             if col_name not in existing_columns:
-                # Extract just the type and default for ALTER TABLE
-                # SQLite ALTER TABLE only supports simple column additions
                 if "DEFAULT" in col_def:
                     parts = col_def.split("DEFAULT")
                     col_type = parts[0].strip()
@@ -87,28 +60,18 @@ class UserDatabase:
                     col_type = col_def.replace("PRIMARY KEY", "").strip()
                     alter_sql = f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"
 
-                if self.log:
-                    self.log.info("Migrating: adding column %s to users table", col_name)
-
                 try:
                     cursor.execute(alter_sql)
-                except sqlite3.OperationalError as e:
-                    if self.log:
-                        self.log.warning("Could not add column %s: %s", col_name, e)
+                except sqlite3.OperationalError:
+                    pass
 
         conn.commit()
 
     def _init_db(self) -> None:
-        """Create database tables if they don't exist."""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if self.log:
-            self.log.info("Creating/opening database at: %s", self.db_path)
-
         conn = sqlite3.connect(str(self.db_path))
         cursor = conn.cursor()
 
-        # Users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -125,7 +88,6 @@ class UserDatabase:
             )
         ''')
 
-        # User chats table (tracks which chats user has interacted from)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_chats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,36 +102,18 @@ class UserDatabase:
         ''')
 
         conn.commit()
-
-        # Run migrations to ensure all columns exist
         self._migrate_schema(conn)
-
         conn.close()
 
-        if self.log:
-            self.log.info("User database initialized successfully at %s", self.db_path)
-
     def has_phone_number(self, user_id: int) -> bool:
-        """Check if user has phone number in database.
-
-        Parameters
-        ----------
-        user_id:
-            Telegram user ID.
-
-        Returns
-        -------
-        bool
-            True if user has phone number, False otherwise.
-        """
         conn = self._get_conn()
         cursor = conn.cursor()
         try:
             cursor.execute("SELECT phone_number FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-            if row and row["phone_number"]:
-                return True
-            return False
+            result = bool(row and row["phone_number"])
+            self.log.info("has_phone_number(%s) = %s", user_id, result)
+            return result
         finally:
             conn.close()
 
@@ -186,45 +130,12 @@ class UserDatabase:
         is_pdf: bool = False,
         phone_number: Optional[str] = None,
     ) -> None:
-        """Record or update user activity.
-
-        Parameters
-        ----------
-        user_id:
-            Telegram user ID.
-        username:
-            Telegram username (without @).
-        first_name:
-            User's first name.
-        last_name:
-            User's last name.
-        language_code:
-            User's language code (e.g., 'en', 'ru').
-        is_bot:
-            Whether the user is a bot.
-        chat_id:
-            Chat ID where interaction occurred.
-        chat_type:
-            Type of chat ('private', 'group', 'supergroup', 'channel').
-        is_pdf:
-            Whether this activity is a PDF upload.
-        phone_number:
-            Phone number if explicitly provided by user.
-        """
         now = datetime.utcnow().isoformat()
-
-        if self.log:
-            self.log.info(
-                "Recording activity for user_id=%s, username=%s, is_pdf=%s",
-                user_id, username, is_pdf
-            )
-
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
 
             try:
-                # Check if user exists
                 cursor.execute(
                     "SELECT user_id, pdfs_sent, messages_count, phone_number FROM users WHERE user_id = ?",
                     (user_id,)
@@ -232,10 +143,8 @@ class UserDatabase:
                 row = cursor.fetchone()
 
                 if row:
-                    # Update existing user
                     pdfs_sent = (row["pdfs_sent"] or 0) + (1 if is_pdf else 0)
                     messages_count = (row["messages_count"] or 0) + 1
-                    # Preserve existing phone if new one not provided
                     existing_phone = row["phone_number"]
                     final_phone = phone_number if phone_number else existing_phone
 
@@ -256,14 +165,7 @@ class UserDatabase:
                         1 if is_bot else 0, final_phone, now,
                         pdfs_sent, messages_count, user_id
                     ))
-
-                    if self.log:
-                        self.log.info(
-                            "Updated user %s: pdfs_sent=%s, messages_count=%s",
-                            user_id, pdfs_sent, messages_count
-                        )
                 else:
-                    # Insert new user
                     cursor.execute('''
                         INSERT INTO users (
                             user_id, username, first_name, last_name, language_code,
@@ -276,10 +178,6 @@ class UserDatabase:
                         1 if is_pdf else 0, 1
                     ))
 
-                    if self.log:
-                        self.log.info("Inserted new user %s", user_id)
-
-                # Record chat if provided
                 if chat_id is not None:
                     cursor.execute('''
                         INSERT INTO user_chats (user_id, chat_id, chat_type, first_seen_at, last_seen_at)
@@ -290,58 +188,42 @@ class UserDatabase:
                     ''', (user_id, chat_id, chat_type, now, now))
 
                 conn.commit()
-
-                if self.log:
-                    self.log.info("Successfully committed user activity for user_id=%s", user_id)
-
-            except Exception as e:
-                if self.log:
-                    self.log.error("Failed to record user activity for user_id=%s: %s", user_id, e)
+            except Exception:
                 conn.rollback()
                 raise
             finally:
                 conn.close()
 
     def update_phone_number(self, user_id: int, phone_number: str) -> None:
-        """Update user's phone number (when explicitly shared via contact).
-
-        Parameters
-        ----------
-        user_id:
-            Telegram user ID.
-        phone_number:
-            Phone number string.
-        """
+        self.log.info("update_phone_number called: user_id=%s, phone=%s", user_id, phone_number)
         now = datetime.utcnow().isoformat()
-
         with self._lock:
             conn = self._get_conn()
             cursor = conn.cursor()
-
             try:
-                cursor.execute('''
-                    UPDATE users SET phone_number = ?, last_activity_at = ?
-                    WHERE user_id = ?
-                ''', (phone_number, now, user_id))
+                cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+                if cursor.fetchone():
+                    cursor.execute('''
+                        UPDATE users SET phone_number = ?, last_activity_at = ?
+                        WHERE user_id = ?
+                    ''', (phone_number, now, user_id))
+                    self.log.info("Updated phone for existing user %s", user_id)
+                else:
+                    cursor.execute('''
+                        INSERT INTO users (user_id, phone_number, first_seen_at, last_activity_at, pdfs_sent, messages_count)
+                        VALUES (?, ?, ?, ?, 0, 1)
+                    ''', (user_id, phone_number, now, now))
+                    self.log.info("Created new user %s with phone", user_id)
                 conn.commit()
             except Exception as e:
-                if self.log:
-                    self.log.error("Failed to update phone for user_id=%s: %s", user_id, e)
+                self.log.error("Failed to update phone: %s", e)
                 conn.rollback()
             finally:
                 conn.close()
 
     def get_all_users(self) -> List[Dict[str, Any]]:
-        """Retrieve all users with their statistics.
-
-        Returns
-        -------
-        List[Dict[str, Any]]
-            List of user records with all fields.
-        """
         conn = self._get_conn()
         cursor = conn.cursor()
-
         try:
             cursor.execute('''
                 SELECT
@@ -359,72 +241,42 @@ class UserDatabase:
                 FROM users u
                 ORDER BY u.last_activity_at DESC
             ''')
-
             users = []
             for row in cursor.fetchall():
                 user = dict(row)
                 user["is_bot"] = bool(user["is_bot"])
-
-                # Get associated chats
                 cursor.execute('''
                     SELECT chat_id, chat_type, first_seen_at, last_seen_at
                     FROM user_chats WHERE user_id = ?
                 ''', (user["user_id"],))
                 user["chats"] = [dict(c) for c in cursor.fetchall()]
-
                 users.append(user)
-
             return users
         finally:
             conn.close()
 
     def get_user(self, user_id: int) -> Optional[Dict[str, Any]]:
-        """Retrieve a single user by ID.
-
-        Parameters
-        ----------
-        user_id:
-            Telegram user ID.
-
-        Returns
-        -------
-        Optional[Dict[str, Any]]
-            User record or None if not found.
-        """
         conn = self._get_conn()
         cursor = conn.cursor()
-
         try:
             cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
             row = cursor.fetchone()
-
             if not row:
                 return None
-
             user = dict(row)
             user["is_bot"] = bool(user["is_bot"])
-
             cursor.execute('''
                 SELECT chat_id, chat_type, first_seen_at, last_seen_at
                 FROM user_chats WHERE user_id = ?
             ''', (user_id,))
             user["chats"] = [dict(c) for c in cursor.fetchall()]
-
             return user
         finally:
             conn.close()
 
     def get_stats_summary(self) -> Dict[str, Any]:
-        """Get aggregate statistics.
-
-        Returns
-        -------
-        Dict[str, Any]
-            Summary statistics.
-        """
         conn = self._get_conn()
         cursor = conn.cursor()
-
         try:
             cursor.execute("SELECT COUNT(*) as total_users FROM users")
             total_users = cursor.fetchone()["total_users"]
