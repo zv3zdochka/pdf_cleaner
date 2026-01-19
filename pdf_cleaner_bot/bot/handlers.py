@@ -56,6 +56,9 @@ def _kb_actions(request_id: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="✅ Обработать", callback_data=f"pdfc:proc:{request_id}"),
                 InlineKeyboardButton(text="🗑 Страницы", callback_data=f"pdfc:pages:{request_id}"),
             ],
+            [
+                InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/vrekota"),
+            ]
         ]
     )
 
@@ -71,6 +74,9 @@ def _kb_downloads(request_id: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="⬇️ Обрезанный", callback_data=f"pdfc:dl:{request_id}:trim"),
                 InlineKeyboardButton(text="⬇️ Обработанный", callback_data=f"pdfc:dl:{request_id}:proc"),
             ],
+            [
+                InlineKeyboardButton(text="🆘 Поддержка", url="https://t.me/vrekota"),
+            ]
         ]
     )
 
